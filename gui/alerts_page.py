@@ -33,16 +33,49 @@ def _count_severity(rows: list) -> dict:
 
 
 def _enrich(findings: list) -> list:
-    # ========== DELETE when Member 1 always returns full CWE/WASC/OWASP fields ==========
+    # ========== DELETE when Member 1 always returns full CWE/WASC/OWASP/NIST/SANS fields ==========
     try:
         from core.cwe_map import enrich_findings
         return enrich_findings(findings or [])
     except Exception:
         return findings or []
     # ========== DELETE end ==========
-    # ========== UNCOMMENT when Member 1 always returns full CWE/WASC/OWASP fields ==========
+    # ========== UNCOMMENT when Member 1 always returns full CWE/WASC/OWASP/NIST/SANS fields ==========
     # return findings or []
     # ========== UNCOMMENT end ==========
+
+
+def _std_tip(f: dict) -> str:
+    parts = [
+        f"CWE: {f.get('cwe_id') or f.get('cweId') or '—'}",
+        f"WASC: {f.get('wasc_id') or f.get('wascId') or '—'}",
+        f"OWASP: {f.get('owasp') or '—'}",
+        f"NIST: {f.get('nist') or f.get('nist_id') or '—'}",
+        f"SANS: {f.get('sans') or f.get('sans_id') or '—'}",
+        f"Plugin: {f.get('plugin_id') or f.get('pluginId') or '—'}",
+        f"Message: {f.get('message_id') or f.get('messageId') or '—'}",
+        f"Confidence: {f.get('confidence') or '—'}",
+    ]
+    rem = str(f.get("remediation") or "").strip()
+    if rem:
+        parts.append(f"Remediation: {rem}")
+    tags = f.get("tags") or f.get("owasp_tags") or []
+    if tags:
+        parts.append("Tags: " + ", ".join(str(t) for t in tags))
+    return "\n".join(parts)
+
+
+def _standards_cell(f: dict) -> str:
+    cwe = str(f.get("cwe_id") or f.get("cweId") or "—")
+    nist = str(f.get("nist") or f.get("nist_id") or "—")
+    sans = str(f.get("sans") or f.get("sans_id") or "—")
+    owasp = str(f.get("owasp") or "").strip()
+    lines = [f"CWE: {cwe}"]
+    if owasp:
+        lines.append(f"OWASP: {owasp}")
+    lines.append(f"NIST: {_shorten(nist, 28)}")
+    lines.append(f"SANS: {_shorten(sans, 28)}")
+    return "\n".join(lines)
 
 
 class AlertsPage(QWidget):
@@ -57,14 +90,17 @@ class AlertsPage(QWidget):
         return bool(getattr(main, "dark_mode", False))
 
     def apply_page_theme(self):
-        """Titles outside cards must adapt: light text on dark shell, dark text on light shell."""
         dark = self._is_dark()
         title_c = "#e2e8f0" if dark else "#1f2a44"
         if hasattr(self, "page_title"):
             self.page_title.setStyleSheet(
                 f"font-size: 15px; font-weight: 800; color: {title_c}; background: transparent;"
             )
-        for empty in (getattr(self, "dyn_empty", None), getattr(self, "st_empty", None)):
+        for empty in (
+            getattr(self, "dyn_empty", None),
+            getattr(self, "st_empty", None),
+            getattr(self, "empty_state_label", None),
+        ):
             if empty is not None:
                 empty.setStyleSheet(
                     "color: #64748b; padding: 18px; font-size: 13px; font-weight: 500;"
@@ -87,9 +123,10 @@ class AlertsPage(QWidget):
 
         body = QWidget()
         body.setStyleSheet("background: transparent;")
-        layout = QVBoxLayout(body)
-        layout.setSpacing(16)
-        layout.setContentsMargins(0, 0, 4, 12)
+        self._body_layout = QVBoxLayout(body)
+        self._body_layout.setSpacing(16)
+        self._body_layout.setContentsMargins(0, 0, 4, 12)
+        self._body_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         scroll.setWidget(body)
 
         top = QHBoxLayout()
@@ -116,10 +153,14 @@ class AlertsPage(QWidget):
         """)
         self.refresh_btn.clicked.connect(self.refresh)
         top.addWidget(self.refresh_btn)
-        layout.addLayout(top)
+        self._body_layout.addLayout(top)
 
+        # Overview — compact, never stretch vertically
         self.overview = QFrame()
         self.overview.setObjectName("overviewCard")
+        self.overview.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
+        )
         self.overview.setStyleSheet("""
             QFrame#overviewCard {
                 background: #ffffff;
@@ -134,6 +175,7 @@ class AlertsPage(QWidget):
         ov = QVBoxLayout(self.overview)
         ov.setContentsMargins(14, 12, 14, 12)
         ov.setSpacing(6)
+        ov.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         ov_title = QLabel("Current scan overview")
         ov_title.setStyleSheet("font-size: 12px; font-weight: 800; color: #64748b;")
@@ -152,31 +194,72 @@ class AlertsPage(QWidget):
         self.overview_type.setStyleSheet(
             "font-size: 13px; font-weight: 600; color: #334155;"
         )
-        self.overview_map = QLabel("Mappings: CWE / WASC / OWASP / confidence")
+        self.overview_map = QLabel(
+            "Mappings: CWE / WASC / OWASP / NIST / SANS · remediation per finding"
+        )
+        self.overview_map.setWordWrap(True)
         self.overview_map.setStyleSheet(
             "font-size: 12px; font-weight: 600; color: #64748b;"
         )
-        ov.addWidget(self.overview_app)
-        ov.addWidget(self.overview_target)
-        ov.addWidget(self.overview_type)
-        ov.addWidget(self.overview_map)
-        layout.addWidget(self.overview)
-
-        layout.addWidget(
-            self._build_section(title="Dynamic scan alerts", subtitle=None, is_static=False)
-        )
-        layout.addWidget(
-            self._build_section(
-                title="Static scan alerts",
-                subtitle="Criticality mapping (static)",
-                is_static=True,
+        for lbl in (
+            self.overview_app,
+            self.overview_target,
+            self.overview_type,
+            self.overview_map,
+        ):
+            lbl.setSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
             )
+            ov.addWidget(lbl)
+        self._body_layout.addWidget(self.overview)
+
+        # Empty state when no active scan (instead of blank stretched page)
+        self.empty_state = QFrame()
+        self.empty_state.setObjectName("emptyStateCard")
+        self.empty_state.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
         )
-        layout.addStretch(1)
+        self.empty_state.setStyleSheet("""
+            QFrame#emptyStateCard {
+                background: #ffffff;
+                border: 1px solid #e2e8f0;
+                border-radius: 14px;
+            }
+        """)
+        es_lay = QVBoxLayout(self.empty_state)
+        es_lay.setContentsMargins(24, 28, 24, 28)
+        es_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_state_label = QLabel(
+            "No active scan.\n\n"
+            "Go to Create Scan and run a Dynamic scan (URL) or Static scan (ZIP).\n"
+            "Findings will appear here with CWE / OWASP / NIST / SANS mappings."
+        )
+        self.empty_state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_state_label.setWordWrap(True)
+        self.empty_state_label.setStyleSheet(
+            "color: #64748b; font-size: 13px; font-weight: 500; background: transparent;"
+        )
+        es_lay.addWidget(self.empty_state_label)
+        self._body_layout.addWidget(self.empty_state)
+
+        self.dyn_section = self._build_section(
+            title="Dynamic scan alerts", subtitle=None, is_static=False
+        )
+        self._body_layout.addWidget(self.dyn_section, 1)
+
+        self.st_section = self._build_section(
+            title="Static scan alerts",
+            subtitle="Criticality mapping (static) · CWE / NIST / SANS",
+            is_static=True,
+        )
+        self._body_layout.addWidget(self.st_section, 1)
+
+        self._body_layout.addStretch(0)
 
     def _build_section(self, title: str, subtitle: str | None, is_static: bool) -> QFrame:
         card = QFrame()
         card.setObjectName("sectionCard")
+        card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         card.setStyleSheet("""
             QFrame#sectionCard {
                 background: #ffffff;
@@ -211,7 +294,7 @@ class AlertsPage(QWidget):
         lay.addLayout(kpis)
 
         table = self._make_table()
-        lay.addWidget(table)
+        lay.addWidget(table, 1)
 
         empty = QLabel(
             "No issues found for this static scan."
@@ -235,7 +318,6 @@ class AlertsPage(QWidget):
                 high, medium, low, total
             )
             self.dyn_table, self.dyn_empty = table, empty
-
         return card
 
     def _kpi_card(self, title: str, value: str, accent: str, bg: str) -> QFrame:
@@ -259,7 +341,6 @@ class AlertsPage(QWidget):
         lay.setContentsMargins(12, 10, 12, 10)
         lay.setSpacing(4)
         lay.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-
         t = QLabel(title)
         t.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         t.setStyleSheet(
@@ -275,28 +356,37 @@ class AlertsPage(QWidget):
 
     def _make_table(self) -> QTableWidget:
         table = QTableWidget()
-        table.setColumnCount(6)
+        table.setColumnCount(7)
         table.setHorizontalHeaderLabels(
-            ["Risk", "Name", "CWE", "Conf.", "Location", "Description"]
+            ["Risk", "Name", "Standards", "Conf.", "Location", "Description", "Remediation"]
         )
         hdr = table.horizontalHeader()
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        table.setColumnWidth(0, 88)
+        table.setColumnWidth(0, 104)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
+        table.setColumnWidth(2, 180)
         hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         table.setColumnWidth(3, 72)
-        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
+        table.setColumnWidth(4, 150)
         hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
+
         table.verticalHeader().setVisible(False)
-        table.verticalHeader().setDefaultSectionSize(48)
+        table.verticalHeader().setDefaultSectionSize(96)
         table.setShowGrid(False)
         table.setAlternatingRowColors(True)
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        table.setMinimumHeight(0)
-        table.setMaximumHeight(260)
+        table.setMouseTracking(True)
+        table.viewport().setMouseTracking(True)
+        table.setMinimumHeight(280)
+        table.setMaximumHeight(16777215)
+        table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        table.setWordWrap(True)
+        table.setTextElideMode(Qt.TextElideMode.ElideNone)
         table.setStyleSheet("""
             QTableWidget {
                 background: #ffffff;
@@ -316,7 +406,7 @@ class AlertsPage(QWidget):
             }
             QTableWidget::item {
                 color: #0f172a;
-                padding: 6px;
+                padding: 8px;
                 border-bottom: 1px solid #eef1f6;
             }
             QTableWidget::item:selected {
@@ -336,12 +426,13 @@ class AlertsPage(QWidget):
         wrap = QWidget()
         wrap.setStyleSheet("background: transparent; border: none;")
         lay = QVBoxLayout(wrap)
-        lay.setContentsMargins(6, 0, 6, 0)
-        lay.addStretch()
+        lay.setContentsMargins(4, 4, 4, 4)
+        lay.setSpacing(0)
+        lay.addStretch(1)
         badge = QLabel(severity)
         badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         badge.setFixedHeight(24)
-        badge.setMinimumWidth(68)
+        badge.setFixedWidth(72)
         badge.setStyleSheet(f"""
             QLabel {{
                 background-color: {bg};
@@ -350,12 +441,19 @@ class AlertsPage(QWidget):
                 border-radius: 12px;
                 font-size: 11px;
                 font-weight: 800;
-                padding: 0 8px;
+                padding: 0 6px;
             }}
         """)
         lay.addWidget(badge, 0, Qt.AlignmentFlag.AlignHCenter)
-        lay.addStretch()
+        lay.addStretch(1)
         return wrap
+
+    def _expand_table(self, table: QTableWidget, n_rows: int):
+        if n_rows <= 0:
+            table.setMinimumHeight(160)
+            return
+        content_h = 40 + sum(table.rowHeight(i) for i in range(table.rowCount())) + 20
+        table.setMinimumHeight(max(320, min(content_h, 1200)))
 
     def _fill_table(
         self, table: QTableWidget, empty_label: QLabel, findings: list, empty_msg: str
@@ -365,24 +463,28 @@ class AlertsPage(QWidget):
         if not findings:
             table.hide()
             empty_label.show()
+            table.setMinimumHeight(120)
             return
         empty_label.hide()
         table.show()
 
         name_font = QFont("Arial", 11, QFont.Weight.Bold)
         normal = QFont("Arial", 11)
+        std_font = QFont("Arial", 10)
         vcenter = Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
+        vcenter_h = Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter
 
         for i, f in enumerate(findings[:40]):
             table.insertRow(i)
-            table.setRowHeight(i, 48)
-
             severity = str(f.get("severity", "Low"))
             name = str(f.get("vulnerability", f.get("name", "")))
-            cwe = str(f.get("cwe_id") or f.get("cweId") or "—")
             conf = str(f.get("confidence") or "—")
             location = str(f.get("location", f.get("url", "")))
-            desc = str(f.get("description", ""))
+            desc = str(f.get("description", "") or "")
+            rem = str(f.get("remediation") or "").strip()
+            tip = _std_tip(f)
+            standards = _standards_cell(f)
+            std_lines = standards.count("\n") + 1
 
             table.setCellWidget(i, 0, self._severity_badge(severity))
 
@@ -390,95 +492,115 @@ class AlertsPage(QWidget):
             name_item.setFont(name_font)
             name_item.setForeground(QBrush(QColor("#0f172a")))
             name_item.setTextAlignment(vcenter)
-            tip_parts = [
-                f"Plugin: {f.get('plugin_id') or f.get('pluginId') or '—'}",
-                f"WASC: {f.get('wasc_id') or f.get('wascId') or '—'}",
-                f"OWASP: {f.get('owasp') or '—'}",
-                f"Message: {f.get('message_id') or f.get('messageId') or '—'}",
-            ]
-            tags = f.get("tags") or f.get("owasp_tags") or []
-            if tags:
-                tip_parts.append("Tags: " + ", ".join(str(t) for t in tags))
-            name_item.setToolTip("\n".join(tip_parts))
+            name_item.setToolTip(tip)
             table.setItem(i, 1, name_item)
 
-            cwe_item = QTableWidgetItem(cwe)
-            cwe_item.setFont(normal)
-            cwe_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            cwe_item.setForeground(QBrush(QColor("#1d4ed8")))
-            table.setItem(i, 2, cwe_item)
+            std_item = QTableWidgetItem(standards)
+            std_item.setFont(std_font)
+            std_item.setTextAlignment(vcenter)
+            std_item.setForeground(QBrush(QColor("#1e3a8a")))
+            std_item.setToolTip(tip)
+            table.setItem(i, 2, std_item)
 
             conf_item = QTableWidgetItem(conf)
             conf_item.setFont(normal)
-            conf_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            conf_item.setTextAlignment(vcenter_h)
             conf_item.setForeground(QBrush(QColor("#334155")))
+            conf_item.setToolTip(tip)
             table.setItem(i, 3, conf_item)
 
             loc_item = QTableWidgetItem(_shorten(location, 40))
-            loc_item.setToolTip(location)
+            loc_item.setToolTip(location if location else tip)
             loc_item.setFont(normal)
             loc_item.setForeground(QBrush(QColor("#475569")))
             loc_item.setTextAlignment(vcenter)
             table.setItem(i, 4, loc_item)
 
-            desc_item = QTableWidgetItem(desc)
+            desc_item = QTableWidgetItem(desc if len(desc) <= 120 else _shorten(desc, 120))
+            desc_item.setToolTip(desc if desc else tip)
             desc_item.setFont(normal)
             desc_item.setForeground(QBrush(QColor("#334155")))
             desc_item.setTextAlignment(vcenter)
             table.setItem(i, 5, desc_item)
+
+            rem_display = rem if rem else "—"
+            rem_item = QTableWidgetItem(
+                rem_display if len(rem_display) <= 120 else _shorten(rem_display, 120)
+            )
+            rem_item.setToolTip(rem if rem else tip)
+            rem_item.setFont(normal)
+            rem_item.setForeground(QBrush(QColor("#0f766e")))
+            rem_item.setTextAlignment(vcenter)
+            table.setItem(i, 6, rem_item)
+
+            text_factor = max(len(desc), len(rem or ""), 1)
+            row_h = max(96, 18 * std_lines + 32)
+            if text_factor > 100:
+                row_h = max(row_h, 110)
+            if text_factor > 160:
+                row_h = max(row_h, 126)
+            table.setRowHeight(i, row_h)
+
+        self._expand_table(table, len(findings))
 
     def refresh(self):
         self.apply_page_theme()
         dyn_rows, st_rows = [], []
         has_session = False
         scan_type = "Dynamic"
-
         try:
             from core.shared_state import SharedState
-
             has_session = bool(
                 hasattr(SharedState, "has_scan_data") and SharedState.has_scan_data()
             )
-
             if has_session:
                 app = getattr(SharedState, "case_name", None) or "—"
                 target = SharedState.current_url or "—"
                 scan_type = getattr(SharedState, "scan_type", None) or "Dynamic"
-
                 self.overview_app.setText(f"Application: {app}")
                 self.overview_target.setText(f"Target: {target}")
                 self.overview_target.setToolTip(str(target))
                 self.overview_type.setText(f"Type: {scan_type}")
-
                 findings = _enrich(list(getattr(SharedState, "findings", None) or []))
                 SharedState.findings = findings
-
-                if scan_type == "Static":
+                if str(scan_type).lower() == "static":
                     st_rows = findings
                     dyn_rows = []
                 else:
-                    dyn_rows = [
-                        f
-                        for f in findings
-                        if str(f.get("scan_origin", "Dynamic")).lower() != "static"
-                    ]
-                    st_rows = [
-                        f
-                        for f in findings
-                        if str(f.get("scan_origin", "")).lower() == "static"
-                    ]
-
-                cwes = sorted(
-                    {str(f.get("cwe_id")) for f in findings if f.get("cwe_id")}
-                )
-                if findings and cwes:
-                    self.overview_map.setText("Mappings: " + ", ".join(cwes[:6]))
-                elif findings:
-                    self.overview_map.setText(
-                        "Mappings: CWE / WASC / OWASP attached per finding"
+                    dyn_rows = findings
+                    st_rows = []
+                if findings:
+                    cwes = sorted(
+                        {str(f.get("cwe_id")) for f in findings if f.get("cwe_id")}
                     )
+                    nists = sorted(
+                        {
+                            str(f.get("nist") or f.get("nist_id"))
+                            for f in findings
+                            if f.get("nist") or f.get("nist_id")
+                        }
+                    )
+                    sanses = sorted(
+                        {
+                            str(f.get("sans") or f.get("sans_id"))
+                            for f in findings
+                            if f.get("sans") or f.get("sans_id")
+                        }
+                    )
+                    bits = []
+                    if cwes:
+                        bits.append("CWE " + ", ".join(cwes[:4]))
+                    if nists:
+                        bits.append("NIST " + ", ".join(nists[:2]))
+                    if sanses:
+                        bits.append("SANS " + ", ".join(sanses[:2]))
+                    if bits:
+                        self.overview_map.setText("Mappings: " + " · ".join(bits))
+                    else:
+                        self.overview_map.setText(
+                            "Mappings: CWE / WASC / OWASP / NIST / SANS · remediation per finding"
+                        )
                 else:
-                    # Active session but clean scan (0 findings)
                     self.overview_map.setText("Mappings: — (no issues found)")
             else:
                 self.overview_app.setText("Application: —")
@@ -493,25 +615,32 @@ class AlertsPage(QWidget):
             self.overview_type.setText("Type: —")
             self.overview_map.setText("Mappings: —")
 
-        # Empty messages: no session vs clean scan vs wrong section for this scan type
         if not has_session:
-            empty_dyn = "No active scan. Run a Dynamic scan from Create Scan."
-            empty_st = "No active scan. Run a Static ZIP scan from Create Scan."
+            self.empty_state.show()
+            self.dyn_section.hide()
+            self.st_section.hide()
+            empty_dyn = ""
+            empty_st = ""
+        elif str(scan_type).lower() == "static":
+            self.empty_state.hide()
+            self.dyn_section.hide()
+            self.st_section.show()
+            empty_dyn = ""
+            empty_st = (
+                "No issues found for this static scan."
+                if not st_rows
+                else "No static alerts for the current scan."
+            )
         else:
-            if scan_type == "Static":
-                empty_dyn = "Current scan is Static — no dynamic alerts for this session."
-                empty_st = (
-                    "No issues found for this static scan."
-                    if not st_rows
-                    else "No static alerts for the current scan."
-                )
-            else:
-                empty_dyn = (
-                    "No issues found for this dynamic scan."
-                    if not dyn_rows
-                    else "No dynamic alerts for the current scan."
-                )
-                empty_st = "Current scan is Dynamic — no static alerts for this session."
+            self.empty_state.hide()
+            self.dyn_section.show()
+            self.st_section.hide()
+            empty_dyn = (
+                "No issues found for this dynamic scan."
+                if not dyn_rows
+                else "No dynamic alerts for the current scan."
+            )
+            empty_st = ""
 
         dyn_c = _count_severity(dyn_rows)
         self.dyn_high.value_label.setText(str(dyn_c["High"]))
