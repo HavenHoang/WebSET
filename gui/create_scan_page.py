@@ -465,7 +465,7 @@ class CreateScanPage(QWidget):
             # ========== DELETE when Member 4 run_stack_eval_url is connected ==========
             from core.mock_backend import run_stack_eval_url
             result = run_stack_eval_url(url)
-            # ========== DELETE end ==========
+            # ========== DELETE end ==========  
             # ========== UNCOMMENT when Member 4 run_stack_eval_url is connected ==========
             # from core.scan_manager import run_stack_eval_url
             # result = run_stack_eval_url(url)
