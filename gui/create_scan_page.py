@@ -462,14 +462,8 @@ class CreateScanPage(QWidget):
         try:
             from core.shared_state import SharedState
 
-            # ========== DELETE when Member 4 run_stack_eval_url is connected ==========
-            from core.mock_backend import run_stack_eval_url
+            from core.scan_manager import run_stack_eval_url
             result = run_stack_eval_url(url)
-            # ========== DELETE end ==========  
-            # ========== UNCOMMENT when Member 4 run_stack_eval_url is connected ==========
-            # from core.scan_manager import run_stack_eval_url
-            # result = run_stack_eval_url(url)
-            # ========== UNCOMMENT end ==========
 
             if isinstance(result, dict) and result.get("error"):
                 msg = self._format_scan_error(result.get("error"))
@@ -538,14 +532,8 @@ class CreateScanPage(QWidget):
             from core.shared_state import SharedState
             target = self._zip_path
 
-            # ========== DELETE when Member 4 run_stack_eval_static is connected ==========
-            from core.mock_backend import run_stack_eval_static
+            from core.scan_manager import run_stack_eval_static
             result = run_stack_eval_static(self._zip_path)
-            # ========== DELETE end ==========
-            # ========== UNCOMMENT when Member 4 run_stack_eval_static is connected ==========
-            # from core.scan_manager import run_stack_eval_static
-            # result = run_stack_eval_static(self._zip_path)
-            # ========== UNCOMMENT end ==========
 
             if isinstance(result, dict) and result.get("error"):
                 msg = self._format_scan_error(result.get("error"))
@@ -633,12 +621,7 @@ class CreateScanPage(QWidget):
         self.update_status(f"Sending URL to backend: {url}")
 
         try:
-            # ========== DELETE when connecting to real backend (Member 4) ==========
-            from core.mock_backend import run_scan
-            # ========== DELETE end ==========
-            # ========== UNCOMMENT when connecting to real backend (Member 4) ==========
-            # from core.scan_manager import run_scan
-            # ========== UNCOMMENT end ==========
+            from core.scan_manager import run_scan
             result = run_scan(url)
             if isinstance(result, dict) and result.get("error"):
                 self._fail_dynamic(self._format_scan_error(result.get("error")))
@@ -782,12 +765,7 @@ class CreateScanPage(QWidget):
         self.update_status(f"Static scan queued for: {self._zip_path}")
 
         try:
-            # ========== DELETE when Member 4 run_static_scan is connected ==========
-            from core.mock_backend import run_static_scan
-            # ========== DELETE end ==========
-            # ========== UNCOMMENT when Member 4 run_static_scan is connected ==========
-            # from core.scan_manager import run_static_scan
-            # ========== UNCOMMENT end ==========
+            from core.scan_manager import run_static_scan
             result = run_static_scan(self._zip_path)
 
             if isinstance(result, dict) and result.get("error"):
