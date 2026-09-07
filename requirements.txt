@@ -1,0 +1,12 @@
+# WebSET — Website Security Evaluation Tool
+# Requires Python 3.10+ (several modules use `str | None` / `list[dict]`
+# type hints without `from __future__ import annotations`, which only
+# resolve natively on 3.10+).
+
+PyQt6>=6.4          # GUI (all gui/*.py pages)
+requests>=2.31       # crawler/fetch.py — HTTP fetching for Start Scan / Get Stack (URL)
+reportlab>=4.0       # reporting/pdf_generator.py — PDF export
+selenium>=4.6        # crawler/browser.py — optional JS-rendered fetch (use_browser=True).
+                     # Selenium 4.6+ auto-manages the chromedriver binary, so no
+                     # separate driver install is needed. Not currently called from
+                     # anywhere in the app, but the code path exists.
