@@ -1,0 +1,15 @@
+# Python bytecode cache
+__pycache__/
+*.pyc
+
+# Virtual environments (if you or teammates use one later)
+venv/
+env/
+.venv/
+
+# OS-generated clutter
+.DS_Store
+Thumbs.db
+
+# Editor-specific settings
+.vscode/
