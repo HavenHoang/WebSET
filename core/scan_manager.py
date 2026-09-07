@@ -1,58 +1,139 @@
-"""core/scan_manager.py -- Backend Core adapter (Member 4) using the crawl package."""
+"""
+core/scan_manager.py — Real backend (Member 4).
+
+Connects the three finished modules (crawler, security_checks, reporting is
+called directly by the GUI so it is not wired here) behind the exact function
+names/signatures the GUI already calls. This file is a drop-in replacement
+for core.mock_backend: every GUI call site that currently does
+
+    from core.mock_backend import run_scan
+    # from core.scan_manager import run_scan
+
+only needs the commented line uncommented and the mock line deleted (or
+commented out) — nothing else in the GUI changes.
+
+Contract (must match core/mock_backend.py exactly, since the GUI branches on
+return shape):
+
+    run_scan(url) -> list[finding]                       on success
+                   -> {"error": code}                     on failure
+
+    run_static_scan(zip_path) -> {"findings": [...], "tech_stacks": [...]}
+                               -> {"error": code}
+
+    run_stack_eval_url(url) -> {"tech_stacks": [...], "findings": [...]}
+
+    run_stack_eval_static(zip_path) -> {"tech_stacks": [...], "findings": [...]}
+                                     -> {"error": code}
+
+Known gap, handled deliberately rather than silently:
+    security_checks/platform_notes.py (the module that should generate Get
+    Stack platform guidance from detected tech) is currently an empty file.
+    Until it is implemented, this module falls back to the hand-written
+    guidance in core.mock_backend._platform_findings so Get Stack keeps
+    returning real, useful notes instead of an empty list. Swap it out the
+    moment platform_notes.py has a real evaluate_tech_stacks(target, stacks)
+    function — see the try/import below.
+"""
 from __future__ import annotations
-from crawler import (fetch_target, extract_forms, detect_tech_stack,
-                   detect_tech_stack_from_path, open_project_zip)
+
+from crawler import (
+    detect_tech_stack,
+    detect_tech_stack_from_path,
+    open_project_zip,
+)
+from security_checks import analyse_dynamic, analyse_static
+
+# ---------------------------------------------------------------------------
+# Platform-note generation is not implemented yet on the security_checks side
+# (security_checks/platform_notes.py is currently empty). Fall back to the
+# mock's hand-written guidance rather than returning nothing.
+# ---------------------------------------------------------------------------
 try:
-    from security_checks import engine as _m1real
+    from security_checks.platform_notes import (
+        evaluate_tech_stacks as _real_platform_notes,
+    )
 except Exception:
-    _m1real = None
+    _real_platform_notes = None
+
 from core import mock_backend as _mock
 
-def _security_checks(url, page):
-    if _m1real and hasattr(_m1real, "run_security_checks"):
-        return _m1real.run_security_checks(url, page)
-    return _mock.run_scan(url)
 
-def _static_analysis(zip_path, project):
-    if _m1real and hasattr(_m1real, "run_static_analysis"):
-        return _m1real.run_static_analysis(project)
-    r = _mock.run_static_scan(zip_path)
-    return r.get("findings", []) if isinstance(r, dict) else r
+def _platform_findings(target: str, stacks: list) -> list:
+    """Guidance notes for detected tech. Real implementation if present,
+    otherwise the mock's hand-written rules (see module docstring)."""
+    if _real_platform_notes is not None:
+        try:
+            return _real_platform_notes(target, stacks) or []
+        except Exception:
+            pass
+    return _mock._platform_findings(target, stacks)
 
-def _eval_url(url, stacks):
-    if _m1real and hasattr(_m1real, "evaluate_tech_stacks_url"):
-        return _m1real.evaluate_tech_stacks_url(url, stacks)
-    try: return _mock._platform_findings(url, stacks)
-    except Exception: return []
 
-def _eval_static(root, stacks):
-    if _m1real and hasattr(_m1real, "evaluate_tech_stacks_static"):
-        return _m1real.evaluate_tech_stacks_static(root, stacks)
-    try: return _mock._platform_findings(root, stacks)
-    except Exception: return []
+# ---------------------------------------------------------------------------
+# Start Scan — dynamic (URL)
+# ---------------------------------------------------------------------------
+def run_scan(url: str):
+    """
+    Success: list of findings (Active Test fields included where relevant).
+    Failure: {"error": code} — invalid_url | timeout | unreachable |
+                                ssl_error | bad_response | crawler_unavailable
 
-def run_scan(url):
-    page = fetch_target(url)                          # Member 2: raw artefact
-    if not page.get("ok"):
-        return {"error": "unreachable"}
-    page["request_targets"] = extract_forms(page)    # Member 2: forms/params for Member 1
-    return _security_checks(url, page)               # Member 1
+    NOTE: analyse_dynamic currently only runs passive checks (security
+    headers, cookies, transport). Injection detection (XSS / SQLi) is not
+    wired in yet — security_checks/injection_checks.py is an empty file, and
+    dynamic_analyser.py has a comment marking where it plugs in once ready.
+    Until then, a clean dynamic scan can legitimately return zero High/XSS/
+    SQLi findings even against a deliberately vulnerable target.
+    """
+    return analyse_dynamic(url)
 
-def run_static_scan(zip_path):
+
+# ---------------------------------------------------------------------------
+# Start Scan — static (ZIP)
+# ---------------------------------------------------------------------------
+def run_static_scan(zip_path: str) -> dict:
+    """
+    Success: {"findings": [...], "tech_stacks": [...]}
+    Failure: {"error": code} — invalid_zip | empty_zip | no_analyzable_files |
+                                unreadable_zip | crawler_unavailable
+    """
+    result = analyse_static(zip_path)
+    if not isinstance(result, dict):
+        return {"error": "unreadable_zip"}
+    if result.get("error"):
+        return {"error": result["error"]}
+
+    findings = result.get("findings") or []
+    # analyse_static intentionally leaves tech_stacks empty (static analysis
+    # and tech detection are separate pipelines) — fill it in here so the
+    # Static Start Scan page can show detected stacks alongside findings.
+    tech_stacks = detect_tech_stack_from_path(zip_path) or []
+    return {"findings": findings, "tech_stacks": tech_stacks}
+
+
+# ---------------------------------------------------------------------------
+# Get Stack — URL
+# ---------------------------------------------------------------------------
+def run_stack_eval_url(url: str) -> dict:
+    """Always returns {"tech_stacks": [...], "findings": [...]}."""
+    stacks = detect_tech_stack(url) or []
+    findings = _platform_findings(url, stacks)
+    return {"tech_stacks": stacks, "findings": findings}
+
+
+# ---------------------------------------------------------------------------
+# Get Stack — ZIP
+# ---------------------------------------------------------------------------
+def run_stack_eval_static(zip_path: str) -> dict:
+    """
+    Success: {"tech_stacks": [...], "findings": [...]}
+    Failure: {"error": code} — invalid_zip | empty_zip | no_analyzable_files
+    """
     project = open_project_zip(zip_path)
     if not project.get("ok"):
-        return {"error": project.get("error", "invalid_zip")}
-    tech = detect_tech_stack_from_path(zip_path)
-    findings = _static_analysis(zip_path, project)
-    return {"findings": findings, "tech_stacks": tech or []}
+        return {"error": project.get("error") or "invalid_zip"}
 
-def run_stack_eval_url(url):
-    stacks = detect_tech_stack(url)
-    return {"tech_stacks": stacks, "findings": _eval_url(url, stacks)}
-
-def run_stack_eval_static(zip_path):
-    project = open_project_zip(zip_path)
-    if not project.get("ok"):
-        return {"error": project.get("error", "invalid_zip")}
-    stacks = detect_tech_stack_from_path(zip_path)
-    return {"tech_stacks": stacks, "findings": _eval_static(zip_path, stacks)}
+    stacks = detect_tech_stack_from_path(zip_path) or []
+    findings = _platform_findings(zip_path, stacks)
+    return {"tech_stacks": stacks, "findings": findings}
