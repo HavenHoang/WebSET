@@ -857,13 +857,8 @@ class PayloadTab(QWidget):
             return
         self.payload_list.blockSignals(True)
         self.payload_list.clear()
-        # ========== UNCOMMENT when Member 3 provides get_payloads ==========
-        # from payload_injection.payloads import get_payloads
-        # payloads = get_payloads(payload_type) or []
-        # ========== UNCOMMENT end ==========
-        # ========== DELETE when Member 3 provides get_payloads ==========
-        payloads = RECOMMENDED_PAYLOADS.get(payload_type, [])
-        # ========== DELETE end ==========
+        from payload_injection.library import get_payloads
+        payloads = get_payloads(payload_type) or []
         if payloads:
             self.payload_list.addItems(payloads)
         else:
@@ -931,40 +926,9 @@ class PayloadTab(QWidget):
             request_text = _build_active_request(finding, test["marker"])
             self.request_editor.setPlainText(request_text)
 
-        marker = test["marker"]
-        # ========== UNCOMMENT when Member 3 provides active verifier ==========
-        # from payload_injection.active_test import run_active_test
-        # result = run_active_test(finding, test, request_text)
-        # self.response_area.setText(result)
-        # return
-        # ========== UNCOMMENT end ==========
-
-        # ========== DELETE: demo detection output (1 request) ==========
-        reflected = True
-        encoded = False
-        status = 200
-        self.response_area.setText(
-            f"[Active Test] Single-request verification\n\n"
-            f"Test            : {test['label']}\n"
-            f"Test id         : {test['id']}\n"
-            f"Marker / input  : {marker}\n"
-            f"Target          : {url}\n"
-            f"Method          : {finding.get('method') or 'GET'}\n"
-            f"Parameter       : {finding.get('param') or finding.get('input') or '—'}\n"
-            f"Param location  : {finding.get('param_location') or 'query'}\n"
-            f"Context         : {finding.get('context') or '—'}\n"
-            f"Requests sent   : 1\n\n"
-            f"----- Detection (demo) -----\n"
-            f"HTTP status     : {status}\n"
-            f"Found in body   : {'YES' if reflected else 'NO'}\n"
-            f"Encoded         : {'YES' if encoded else 'NO'}\n"
-            f"DB error signal : NO\n"
-            f"Confidence      : HIGH (demo)\n"
-            f"Conclusion      : Potential issue indicators present — validate manually\n\n"
-            f"----- Request sent -----\n"
-            f"{request_text}\n"
-        )
-        # ========== DELETE end ==========
+        from payload_injection.active_test import run_active_test
+        result = run_active_test(finding, test, request_text)
+        self.response_area.setText(result)
 
         main_window = self.window()
         if main_window and hasattr(main_window, "show_toast"):
@@ -994,31 +958,9 @@ class PayloadTab(QWidget):
             )
             return
 
-        # ========== UNCOMMENT when connecting to real Payload module (Member 3) ==========
-        # from payload_injection.injector import send_payload
-        # result = send_payload(url, request_text, payload_type)
-        # self.response_area.setText(result)
-        # return
-        # ========== UNCOMMENT end ==========
-
-        # ========== DELETE when connecting to real Payload module (Member 3) ==========
-        selected_payload = self.payload_list.currentText()
-        if not selected_payload or selected_payload.startswith("(No recommended"):
-            first_line = (
-                request_text.splitlines()[0] if request_text else "Custom (manual input)"
-            )
-            selected_payload = first_line
-        self.response_area.setText(
-            f"[Demo] Payload sent successfully\n\n"
-            f"Target : {url}\n"
-            f"Type : {payload_type}\n"
-            f"Payload : {selected_payload}\n"
-            f"Status : 200 OK\n\n"
-            f"----- Request sent -----\n"
-            f"{request_text}\n\n"
-            f"This is a simulated response."
-        )
-        # ========== DELETE end ==========
+        from payload_injection.injector import send_payload
+        result = send_payload(url, request_text, payload_type)
+        self.response_area.setText(result)
 
         main_window = self.window()
         if main_window and hasattr(main_window, "show_toast"):
