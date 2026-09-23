@@ -578,23 +578,23 @@ def _base_result(**kwargs) -> dict:
     return out
 def analyse_xss(marker: str, body: str, context: str = "", expect: str = "") -> dict:
     raw = body or ""
-    body = _plain(body)
+    plain = _plain(raw)
     marker = marker or ""
-    found = _token_hit(marker, body)
     encoded = False
     if "<" in marker:
-        encoded = (_HTML_LT in body) and (marker not in body)
-        found = marker in body or encoded
+        raw_l = raw.lower()
+        mark_l = marker.lower()
+        found = mark_l in raw_l
         if not found:
-            for v in _decode_variants(marker):
-                if v in body:
+            for variant in _decode_variants(marker):
+                if variant.lower() in raw_l or variant.lower() in plain.lower():
                     found = True
                     break
-            if (_HTML_LT in body) and marker not in body:
-                encoded = True
-                found = found or encoded
-    elif _HTML_LT in body and marker in body:
-        encoded = True
+        encoded = ("<" in raw_l) and (mark_l not in raw_l)
+        if found and mark_l in raw_l:
+            encoded = False
+    else:
+        found = _token_hit(marker, plain) or _token_hit(marker, raw)
     evidence = _evidence_snippet(raw, [marker] if marker else [])
     if not _usable_evidence(evidence):
         evidence = _body_fallback(raw)
@@ -609,7 +609,7 @@ def analyse_xss(marker: str, body: str, context: str = "", expect: str = "") -> 
             expect=expect,
             evidence=evidence,
         )
-    if found and not encoded and _is_xss_poc(marker) and _looks_html(body):
+    if found and not encoded and _is_xss_poc(marker) and _looks_html(raw):
         return _base_result(
             found_in_body=True,
             confirmation="CONFIRMED",
@@ -629,7 +629,7 @@ def analyse_xss(marker: str, body: str, context: str = "", expect: str = "") -> 
             expect=expect,
             evidence=evidence,
         )
-    if found and not encoded and _is_xss_poc(marker) and _looks_json(body):
+    if found and not encoded and _is_xss_poc(marker) and _looks_json(plain):
         return _base_result(
             found_in_body=True,
             confirmation="LIKELY",
@@ -649,7 +649,7 @@ def analyse_xss(marker: str, body: str, context: str = "", expect: str = "") -> 
             expect=expect,
             evidence=evidence,
         )
-    if found and not encoded and _looks_json(body):
+    if found and not encoded and _looks_json(plain):
         return _base_result(
             found_in_body=True,
             confirmation="NOT CONFIRMED",
@@ -787,12 +787,25 @@ def analyse_sqli(marker: str, body: str, status_code: int, expect: str = "") -> 
         expect=expect,
         evidence=evidence,
     )
+def _include_of_probe(body: str, marker: str) -> bool:
+    """True when the probe itself was handed to include/require/fopen."""
+    text = body or ""
+    low = text.lower()
+    if not any(s in low for s in ("include(", "require(", "failed opening", "fopen(", "file_get_contents(")):
+        return False
+    token = (marker or "").strip()
+    if token and token.lower() in low:
+        return True
+    return any(p in low for p in ("../", "..\\", "....//", "..%2f", "%2e%2e"))
+
+
 def analyse_path_traversal(marker: str, body: str, status_code: int, expect: str = "") -> dict:
     raw = body or ""
     body = _plain(body)
     hit = any(sig in body for sig in _TRAVERSAL_HITS)
     found = _token_hit(marker or "", body)
     fs_err = _fs_error(body)
+    included = _include_of_probe(body, marker or "")
     needles = list(_TRAVERSAL_HITS) + list(_FS_ERRORS) + ([marker] if marker else [])
     evidence = _evidence_snippet(raw, needles)
     if not _usable_evidence(evidence):
@@ -806,12 +819,24 @@ def analyse_path_traversal(marker: str, body: str, status_code: int, expect: str
             expect=expect,
             evidence=evidence,
         )
+    if included:
+        return _base_result(
+            found_in_body=True,
+            confirmation="CONFIRMED",
+            conclusion="Traversal confirmed — path passed to file include",
+            detail=(
+                "The server passed this parameter to include/require. "
+                "The file was not found, but the include of attacker input is the vulnerability."
+            ),
+            expect=expect,
+            evidence=evidence,
+        )
     if int(status_code or 0) >= 500 or fs_err:
         return _base_result(
             found_in_body=found,
             confirmation="LIKELY",
             conclusion="Traversal likely — filesystem error",
-            detail="Path probe produced a filesystem-style error. That is not proof a foreign file was read.",
+            detail="Path probe produced a filesystem-style error. The probe path was not shown inside include().",
             expect=expect,
             evidence=evidence,
         )

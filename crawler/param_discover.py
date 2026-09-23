@@ -15,6 +15,11 @@ _AUTH_PATH_RE = re.compile(
     re.I,
 )
 _SEARCH_PATH_RE = re.compile(r"/(?:search|find|query|products?/search)\b", re.I)
+# Paths written in minified JS, quoted or concatenated — must appear in artefact text.
+_LOOSE_API_PATH_RE = re.compile(
+    r"(/(?:api|rest|v\d+)[A-Za-z0-9_./\-]*(?:search|find|query|login)[A-Za-z0-9_./\-]*)",
+    re.I,
+)
 _AUTH_PATH_HINT = re.compile(r"(?:login|signin|authenticate|session)\b", re.I)
 _INPUT_NAME_RE = re.compile(
     r"""<(?:input|select|textarea)\b[^>]*\bname\s*=\s*['"]([^'"]+)['"]""",
@@ -30,6 +35,19 @@ _HASH_ROUTE_RE = re.compile(
 _QUOTED_HASH_RE = re.compile(
     r"""['"`](#/[A-Za-z0-9][A-Za-z0-9_./\-]*(?:\?[A-Za-z0-9_\-.=&%]*)?)['"`]""",
 )
+_JS_ENDPOINT_RE = re.compile(
+    r"""(?P<path>/(?:api|rest|graphql|v\d+)(?:/[A-Za-z0-9_.\-]+){1,10})"""
+    r"""(?:\?(?P<name>[A-Za-z_][A-Za-z0-9_]{0,40})(?:=|&|['"`]|$))?""",
+)
+_JS_ROUTER_PATH_RE = re.compile(
+    r"""\bpath\s*:\s*(['"`])([A-Za-z0-9][^'"`]{0,80})\1"""
+)
+_JS_HASH_MODE_RE = re.compile(
+    r"useHash\s*:\s*(?:!0|true)|HashLocationStrategy",
+    re.I,
+)
+_JS_HASH_LITERAL_RE = re.compile(r"""#/([A-Za-z0-9][A-Za-z0-9_\-./]{0,80})""")
+_SINKISH_RE = re.compile(r"search|find|query|result", re.I)
 _STATIC_EXT_RE = re.compile(
     r"\.(?:css|js|mjs|map|png|jpe?g|gif|svg|ico|woff2?|ttf|eot|webp)(?:\?|$)",
     re.I,
@@ -90,8 +108,20 @@ def _hash_to_http(fragment: str, base: str) -> str:
         path, query = frag, ""
     path = path or "/"
     return f"{origin}{path}" + (f"?{query}" if query else "")
+def _ok_param_name(name: str) -> bool:
+    n = str(name or "").strip()
+    if not n:
+        return False
+    low = n.lower()
+    if ";" in n or low.startswith("amp;") or n.startswith("&") or n.startswith("#"):
+        return False
+    if any(ch.isspace() for ch in n):
+        return False
+    return True
+
+
 def _add_target(out: list, seen: set, url: str, method: str, name: str, location: str, value: str = ""):
-    if not url or not name:
+    if not url or not _ok_param_name(name):
         return
     method = (method or "GET").upper()
     location = (location or "query").lower()
@@ -207,11 +237,80 @@ def discover_request_targets(page: dict, base_url: str = "") -> list:
     for raw in list(_API_PATH_RE.findall(body)) + list(_AUTH_PATH_RE.findall(body)):
         abs_url = _abs_url(raw, origin + "/")
         _targets_from_url(abs_url, root, out, seen)
+    for raw in _LOOSE_API_PATH_RE.findall(body or ""):
+        abs_url = _abs_url(raw, origin + "/")
+        _targets_from_url(abs_url, root, out, seen)
     for raw in _QUOTED_URL_RE.findall(body):
         abs_url = _abs_url(raw, origin + "/")
         if abs_url:
             _targets_from_url(abs_url, root, out, seen)
     return out
+def discover_script_sinks(text: str, base_url: str) -> dict:
+    """
+    Endpoints and hash routes copied out of script that was actually downloaded.
+    Does not invent paths. Query names come from the same literal (?q=, &id=).
+    """
+    raw = (text or "").replace("\\/", "/")
+    origin = _origin(base_url)
+    if not origin:
+        return {"params": [], "hash_paths": [], "hash_params": [], "hash_mode": False}
+    params: list[dict] = []
+    seen: set = set()
+    hash_names: list[str] = []
+    def _add_param(path: str, name: str):
+        path = (path or "").split("?", 1)[0]
+        if not path.startswith("/") or _STATIC_EXT_RE.search(path):
+            return
+        name = str(name or "").strip()
+        if not _ok_param_name(name):
+            return
+        key = ("GET", path, name.lower())
+        if key in seen:
+            return
+        seen.add(key)
+        params.append({
+            "name": name,
+            "value": "",
+            "location": "query",
+            "method": "GET",
+            "url": origin + path,
+            "source": "url",
+        })
+        if name.lower() not in {n.lower() for n in hash_names}:
+            if _SINKISH_RE.search(path) or name.lower() in ("q", "query", "search", "keyword", "term"):
+                hash_names.append(name)
+    for match in _JS_ENDPOINT_RE.finditer(raw):
+        path = match.group("path") or ""
+        name = match.group("name") or ""
+        if name:
+            _add_param(path, name)
+    hash_paths: list[str] = []
+    path_seen: set = set()
+    def _add_hash(path: str):
+        path = "/" + str(path or "").strip("/")
+        path = path.split("?", 1)[0]
+        if not path or path in ("/",) or "*" in path or ":" in path:
+            return
+        if not _SINKISH_RE.search(path):
+            return
+        if path in path_seen:
+            return
+        path_seen.add(path)
+        hash_paths.append(path)
+    for match in _JS_ROUTER_PATH_RE.finditer(raw):
+        _add_hash(match.group(2))
+    for match in _JS_HASH_LITERAL_RE.finditer(raw):
+        _add_hash(match.group(1))
+    if hash_paths and not hash_names and re.search(r"[?&]q=", raw):
+        hash_names.append("q")
+    params.sort(key=lambda p: (0 if _SINKISH_RE.search(str(p.get("url") or "")) else 1, str(p.get("url") or "")))
+    hash_paths.sort(key=lambda p: (0 if "search" in p.lower() else 1, len(p)))
+    return {
+        "params": params[:60],
+        "hash_paths": hash_paths[:4],
+        "hash_params": hash_names[:4],
+        "hash_mode": bool(_JS_HASH_MODE_RE.search(raw)),
+    }
 def discover_params(page: dict | None = None, base_url: str = "") -> list:
     return discover_request_targets(page or {}, base_url)
 def extract_params(body: str, base_url: str = "") -> list:

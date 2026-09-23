@@ -202,8 +202,15 @@ def _inject_value(finding: dict, marker: str) -> str:
         base = _existing_param_value(finding, param) or "localhost"
         return base + marker
     return marker
-def _form_body(param: str, value: str) -> str:
-    fields = with_form_controls({param: value}, param)
+def _form_body(param: str, value: str, companions: dict | None = None) -> str:
+    fields = {}
+    if isinstance(companions, dict):
+        for key, raw in companions.items():
+            name = str(key or "").strip()
+            if name:
+                fields[name] = "" if raw is None else str(raw)
+    fields[param] = value
+    fields = with_form_controls(fields, param)
     return urlencode(fields)
 def _target_url_with_marker(
     finding: dict,
@@ -226,6 +233,13 @@ def _target_url_with_marker(
         url = urlunparse((p.scheme, p.netloc, p.path or "/", "", p.query, ""))
         return method, url, None
     if method == "GET" or loc in ("query", "url", "get") and method not in ("POST", "PUT", "PATCH"):
+        frag = p.fragment or ""
+        if frag.startswith("/") or frag.startswith("!/"):
+            frag_path, _, frag_query = frag.partition("?")
+            q = dict(parse_qsl(frag_query, keep_blank_values=True))
+            q[param] = value
+            url = urlunparse((p.scheme, p.netloc, p.path or "/", "", "", f"{frag_path}?{urlencode(q)}"))
+            return method, url, None
         q = dict(parse_qsl(p.query, keep_blank_values=True))
         companions = finding.get("companions")
         if isinstance(companions, dict):
@@ -253,7 +267,7 @@ def _target_url_with_marker(
             payload.setdefault("message", "webset-nosql")
         return method, url, json.dumps(payload)
     url = urlunparse((p.scheme, p.netloc, p.path or "/", "", p.query, ""))
-    return method, url, _form_body(param, value)
+    return method, url, _form_body(param, value, finding.get("companions"))
 def _parse_editor_request(
     request_text: str,
     fallback_url: str,
@@ -298,6 +312,11 @@ def _probe_from_sent(finding: dict, abs_url: str, body: str | None, fallback: st
     param = str(finding.get("param") or finding.get("input") or "").strip()
     parsed = urlparse(abs_url or "")
     q = parse_qs(parsed.query, keep_blank_values=True)
+    frag = parsed.fragment or ""
+    if "?" in frag:
+        q = dict(q)
+        for key, values in parse_qs(frag.split("?", 1)[1], keep_blank_values=True).items():
+            q.setdefault(key, values)
     if param and param in q and q[param] and str(q[param][0]).strip():
         return str(q[param][0])
     if body:
@@ -319,6 +338,36 @@ def _probe_from_sent(finding: dict, abs_url: str, body: str | None, fallback: st
     if segs:
         return segs[-1]
     return fallback
+def _client_route(url: str) -> bool:
+    frag = urlparse(url or "").fragment or ""
+    return frag.startswith("/") or frag.startswith("!/")
+def _render_client_route(url: str, marker: str) -> dict:
+    """Hash/client routes are not in the HTTP body. Render them once."""
+    try:
+        from crawler.browser import fetch_with_selenium
+    except Exception as exc:
+        return {"ok": False, "status": 0, "body": "", "headers": {}, "error": str(exc)}
+    rendered = fetch_with_selenium(
+        url,
+        timeout=16.0,
+        wait_text=marker,
+        skip_login=True,
+    )
+    if not rendered.get("ok"):
+        return {
+            "ok": False,
+            "status": 0,
+            "body": "",
+            "headers": {},
+            "error": rendered.get("error") or "browser render failed",
+        }
+    return {
+        "ok": True,
+        "status": 200,
+        "body": rendered.get("body") or "",
+        "headers": {},
+        "error": None,
+    }
 def format_result(
     *,
     test: dict,
@@ -590,7 +639,10 @@ def _execute_one(finding: dict, test: dict, request_text: str = "") -> dict:
                     head, rest = request_text.split("\n\n", 1)
                     request_text = head + f"\nAuthorization: Bearer {token}\n\n" + rest
                     out["request"] = request_text
-    resp = send_once(method=method, url=abs_url, headers=headers, data=body)
+    if _client_route(abs_url):
+        resp = _render_client_route(abs_url, marker)
+    else:
+        resp = send_once(method=method, url=abs_url, headers=headers, data=body)
     if not resp.get("ok"):
         out["error"] = resp.get("error") or "request failed"
         out["text"] = format_result(

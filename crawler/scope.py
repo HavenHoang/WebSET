@@ -59,8 +59,15 @@ def _directory_prefix(path: str) -> str:
         parent = raw[: raw.rfind("/")]
         return parent or "/"
     return raw
+def _host_key(url: str) -> str:
+    host = host_of(url)
+    if host.startswith("www."):
+        return host[4:]
+    return host
+
+
 def same_host(url: str, root: str) -> bool:
-    a, b = host_of(url), host_of(root)
+    a, b = _host_key(url), _host_key(root)
     return bool(a and b and a == b)
 def under_start_path(url: str, root: str) -> bool:
     """True when url is on the start path or a subpath.

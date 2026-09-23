@@ -1,6 +1,6 @@
 """Manual Payload mode — user-edited raw request."""
 from __future__ import annotations
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, parse_qsl
 from payload_injection.scope import in_scope, host_of
 from payload_injection.http_client import send_once
 from payload_injection.detectors import analyse_for_vuln_type, _is_xss_poc
@@ -67,6 +67,10 @@ def _parse_raw_http(
 def _marker_from_request(abs_url: str, body: str | None) -> str:
     parsed = urlparse(abs_url or "")
     q = parse_qs(parsed.query, keep_blank_values=True)
+    frag = parsed.fragment or ""
+    if "?" in frag:
+        for key, values in parse_qs(frag.split("?", 1)[1], keep_blank_values=True).items():
+            q.setdefault(key, values)
     for values in q.values():
         if values and str(values[0]).strip():
             return str(values[0])
@@ -76,6 +80,64 @@ def _marker_from_request(abs_url: str, body: str | None) -> str:
     if segs:
         return segs[-1]
     return ""
+def _rebase_url(abs_url: str, fallback_url: str, request_text: str) -> str:
+    """Keep a client-route fragment. Rebuilding from path+query used to drop #/search."""
+    first_path = ""
+    try:
+        first_path = request_text.splitlines()[0].split()[1]
+    except Exception:
+        first_path = ""
+    if first_path.startswith(("http://", "https://")):
+        return abs_url
+    parsed_scan = urlparse(fallback_url if "://" in (fallback_url or "") else "http://" + (fallback_url or ""))
+    parsed_abs = urlparse(abs_url or "")
+    path = parsed_abs.path or "/"
+    if parsed_abs.query:
+        path += "?" + parsed_abs.query
+    if parsed_abs.fragment:
+        path += "#" + parsed_abs.fragment
+    host = parsed_abs.netloc or host_of(fallback_url) or "localhost"
+    scheme = parsed_scan.scheme or "http"
+    return f"{scheme}://{host}{path}"
+_SCRIPT_CACHE: dict[str, str] = {}
+def _client_param(url: str, marker: str) -> str:
+    frag = urlparse(url or "").fragment or ""
+    query = frag.split("?", 1)[1] if "?" in frag else ""
+    pairs = parse_qsl(query, keep_blank_values=True)
+    wanted = str(marker or "")
+    for key, value in pairs:
+        if value == wanted:
+            return key
+    return pairs[0][0] if pairs else ""
+def _script_for_origin(url: str) -> str:
+    from security_checks.injection_checks import _harvest_script_text, _origin, _send
+    origin = _origin(url)
+    if not origin:
+        return ""
+    cached = _SCRIPT_CACHE.get(origin)
+    if cached is not None:
+        return cached
+    page = _send("GET", origin + "/", timeout=8.0)
+    body = page.get("body") if page.get("ok") else ""
+    text = _harvest_script_text(origin + "/", body or "")
+    _SCRIPT_CACHE[origin] = text or ""
+    return _SCRIPT_CACHE[origin]
+def _client_sink(url: str, param: str) -> str:
+    """Same data-flow as the scan: query param copied into an HTML sink."""
+    if not param:
+        return ""
+    from security_checks.injection_checks import _dom_xss_from_script, _origin
+    origin = _origin(url) or ""
+    script = _script_for_origin(url)
+    if not script:
+        return ""
+    for item in _dom_xss_from_script(origin + "/", script):
+        if str(item.get("param") or "").lower() == param.lower():
+            return str(item.get("evidence") or "HTML sink")
+    return ""
+def _client_route(url: str) -> bool:
+    frag = urlparse(url or "").fragment or ""
+    return frag.startswith("/") or frag.startswith("!/")
 def _plain_meaning(
     vtype: str,
     detection: dict,
@@ -135,6 +197,22 @@ def _plain_meaning(
         )
     if vtype == "xss":
         poc = _is_xss_poc(marker)
+        sink = str(detection.get("evidence") or detection.get("detail") or "").strip()
+        if sink and sink[-1] not in ".!?":
+            sink += "."
+        client_sink = "html sink" in sink.lower() or "client script" in sink.lower()
+        if client_sink and confirm == "CONFIRMED" and poc:
+            return (
+                "The value is written into an HTML sink without encoding",
+                f"{sink} A browser treats that value as HTML, so a payload in this "
+                f"parameter can run as script in the page. The HTTP response itself does not contain the payload.",
+            )
+        if client_sink and confirm == "LIKELY":
+            return (
+                "The value reaches an HTML sink without encoding",
+                f"{sink} The parameter is copied into the page as HTML. A plain marker "
+                f"only shows the sink is reachable. It is not proof that script would run.",
+            )
         if found and not encoded and poc and confirm == "CONFIRMED":
             return (
                 "The probe came back in the page unescaped",
@@ -172,6 +250,15 @@ def _plain_meaning(
             ),
         )
     if vtype in ("path_traversal", "lfi"):
+        ev = str(detection.get("evidence") or detection.get("detail") or "").lower()
+        included = any(s in ev for s in ("include(", "require(", "failed opening", "for inclusion"))
+        if confirm == "CONFIRMED" and included and "root:x:" not in ev:
+            return (
+                "The parameter was passed to a file include",
+                "The server tried to include the path from this parameter. "
+                "The file was not found, but that include is the vulnerability. "
+                "A successful file read is not required.",
+            )
         if confirm == "CONFIRMED":
             return (
                 "The response included a file outside the intended path",
@@ -249,13 +336,7 @@ def send_payload(
     headers = dict(headers or {})
     headers.setdefault("Connection", "close")
     headers.setdefault("User-Agent", "WebSET-ActiveTest")
-    if not (request_text.splitlines()[0].split()[1].startswith("http://") or
-            request_text.splitlines()[0].split()[1].startswith("https://")):
-        parsed_scan = urlparse(url if "://" in url else "http://" + url)
-        path = urlparse(abs_url).path or "/"
-        if urlparse(abs_url).query:
-            path += "?" + urlparse(abs_url).query
-        abs_url = f"{parsed_scan.scheme}://{fallback_host}{path}"
+    abs_url = _rebase_url(abs_url, url, request_text)
     if not in_scope(abs_url, url):
         return (
             "[Error] Request host is outside scan scope.\n"
@@ -263,8 +344,34 @@ def send_payload(
             f"Scan host:    {host_of(url)}\n"
         )
     vtype = _TYPE_MAP.get(str(payload_type or "").upper(), "custom")
+    probe = (marker or "").strip() or _marker_from_request(abs_url, body)
     xml_blob = (marker or body or "").strip()
-    if vtype == "xxe" and xml_blob.lstrip().startswith("<?xml"):
+    preset = None
+    if _client_route(abs_url) and vtype == "xss":
+        evidence = _client_sink(abs_url, _client_param(abs_url, probe))
+        resp = {"ok": True, "status": 200, "body": "", "headers": {}, "error": None, "requests_sent": 1}
+        if evidence:
+            from payload_injection.detectors import _is_distinctive, _is_xss_poc
+            if _is_xss_poc(probe):
+                confirmation = "CONFIRMED"
+                conclusion = "The value is written into an HTML sink without encoding"
+            elif _is_distinctive(probe) or "<" in probe:
+                confirmation = "LIKELY"
+                conclusion = "The value reaches an HTML sink without encoding"
+            else:
+                confirmation = "NOT CONFIRMED"
+                conclusion = "No clear reflection"
+            preset = {
+                "found_in_body": False,
+                "encoded": False,
+                "db_error_signal": False,
+                "auth_success": False,
+                "confirmation": confirmation,
+                "conclusion": conclusion,
+                "detail": evidence,
+                "evidence": evidence,
+            }
+    elif vtype == "xxe" and xml_blob.lstrip().startswith("<?xml"):
         try:
             import requests
             hdrs = {
@@ -304,16 +411,22 @@ def send_payload(
     if not resp.get("ok"):
         return f"[Error] {resp.get('error')}\nRequests sent: 1"
     body_preview = (resp.get("body") or "")[:2000]
-    probe = (marker or "").strip() or _marker_from_request(abs_url, body)
-    vtype = _TYPE_MAP.get(str(payload_type or "").upper(), "custom")
-    detection = analyse_for_vuln_type(
-        vtype,
-        probe,
-        resp.get("body") or "",
-        int(resp.get("status") or 0),
-        context="",
-        expect=str(expect or ""),
-    )
+    if preset is not None and not body_preview.strip():
+        body_preview = (
+            "(empty) Hash routes are not sent to the server. "
+            "This HTTP body is only the app shell and does not contain the payload."
+        )
+    if preset is None:
+        detection = analyse_for_vuln_type(
+            vtype,
+            probe,
+            resp.get("body") or "",
+            int(resp.get("status") or 0),
+            context="",
+            expect=str(expect or ""),
+        )
+    else:
+        detection = preset
     yes_no = lambda b: "YES" if b else "NO"
     meaning_title, meaning_detail = _plain_meaning(
         vtype,

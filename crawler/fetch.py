@@ -7,8 +7,13 @@ from crawler.scope import normalise_url, is_http_url, in_scope, same_host
 from crawler.headers_cookies import headers_to_dict, set_cookie_list
 DEFAULT_TIMEOUT = 15
 DEFAULT_HEADERS = {
-    "User-Agent": "WebSET-Scanner/1.0 (+local research)",
-    "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
     "Connection": "close",
 }
 _LAB_LOGINS = (

@@ -1,9 +1,12 @@
 from __future__ import annotations
 import json
+import time
 import re
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 _ORIGIN_WIDE_TRIES: dict[str, int] = {}
 _MAX_WIDE_TRIES = 3
+_PROBE_TIMEOUT = 3.0
+_SURFACE_BUDGET_SEC = 12.0
 
 
 def reset_origin_wide_probes() -> None:
@@ -223,7 +226,7 @@ def _send(method: str, url: str, body: str | None = None, content_type: str | No
             headers=headers,
             data=body,
             files=files,
-            timeout=8,
+            timeout=_PROBE_TIMEOUT,
             allow_redirects=False,
         )
         try:
@@ -328,10 +331,10 @@ def _probe_dom_xss(origin: str, start: str, cookies=None) -> list[dict]:
             continue
         seen.add(url)
         try:
-            rendered = fetch_with_selenium(url, timeout=15.0, cookies=cookies)
+            rendered = fetch_with_selenium(url, timeout=6.0, cookies=cookies)
         except TypeError:
             try:
-                rendered = fetch_with_selenium(url, timeout=15.0)
+                rendered = fetch_with_selenium(url, timeout=6.0)
             except Exception:
                 continue
         except Exception:
@@ -1256,12 +1259,15 @@ def _surface_idor(origin: str, cookies=None, artefact=None, start: str = "") -> 
 
 
 def run_generic_surface_checks(ctx, artefact: dict | None = None) -> list[dict]:
+    started = time.time()
     start = getattr(ctx, "requested_url", None) or getattr(ctx, "url", None) or ""
     origin = _origin(start)
     if not origin:
         return []
     findings: list[dict] = []
     cookies = _cookies_from(ctx, artefact)
+    def _budget():
+        return (time.time() - started) < _SURFACE_BUDGET_SEC
     art_body = str((artefact or {}).get("body") or "")
     if _site_root(start):
         home = _send("GET", origin + "/", cookies=cookies)
@@ -1271,6 +1277,8 @@ def run_generic_surface_checks(ctx, artefact: dict | None = None) -> list[dict]:
     probed = set()
     if _site_root(start):
         for path, needles in _SENSITIVE_PATHS:
+            if not _budget():
+                break
             url = urljoin(origin + "/", path.lstrip("/"))
             probed.add(urlparse(url).path.rstrip("/") or "/")
             if not _allowed(url, start):
@@ -1335,6 +1343,8 @@ def run_generic_surface_checks(ctx, artefact: dict | None = None) -> list[dict]:
                         )
                     )
         for path in _KEY_PATHS:
+            if not _budget():
+                break
             url = urljoin(origin + "/", path.lstrip("/"))
             probed.add(urlparse(url).path.rstrip("/") or "/")
             if not _allowed(url, start):
@@ -1356,6 +1366,8 @@ def run_generic_surface_checks(ctx, artefact: dict | None = None) -> list[dict]:
                     )
                 )
         for path in _SIGNATURE_PATHS:
+            if not _budget():
+                break
             url = urljoin(origin + "/", str(path).lstrip("/"))
             key = urlparse(url).path.rstrip("/") or "/"
             if key in probed:
@@ -1423,11 +1435,12 @@ def run_generic_surface_checks(ctx, artefact: dict | None = None) -> list[dict]:
                     break
             if found_redirect:
                 break
-    findings.extend(_probe_dom_xss(origin, start, cookies=cookies))
+    if _budget():
+        findings.extend(_probe_dom_xss(origin, start, cookies=cookies))
     findings.extend(_upload_surface(ctx, artefact))
     findings.extend(_csrf_surface(ctx, artefact))
     findings.extend(_weak_session_surface(ctx, artefact))
-    if _site_root(start):
+    if _site_root(start) and _budget():
         findings.extend(_surface_xxe(origin, cookies=cookies))
         findings.extend(_surface_sqli_auth(origin, cookies=cookies))
         findings.extend(_surface_nosql(origin, cookies=cookies))

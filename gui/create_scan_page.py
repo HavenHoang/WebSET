@@ -3,7 +3,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QProgressBar, QFrame, QFileDialog, QApplication,
     QSizePolicy
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QObject, QThread, pyqtSignal
 from urllib.parse import urlparse, urlunparse
 import sys
 import os
@@ -15,6 +15,7 @@ if ROOT_DIR not in sys.path:
 
 _SCAN_ERROR_MESSAGES = {
     "unreachable": "Target website does not exist or is unreachable",
+    "out_of_scope": "Target redirected to a different host, so the scan stopped",
     "invalid_zip": "Invalid or corrupt ZIP file",
     "empty_zip": "ZIP is empty — nothing to analyse",
     "no_analyzable_files": "No analysable source files found in the ZIP",
@@ -75,6 +76,41 @@ def _display_finding_count(rows: list) -> int:
             return len(_collapse_similar_findings(rows))
         except Exception:
             return len(rows)
+
+
+def _short_scan_path(label: str) -> str:
+    text = str(label or "").strip()
+    if "://" in text:
+        left, _, rest = text.partition(" · ")
+        try:
+            parsed = urlparse(left)
+            left = (parsed.path or "/") + (("?" + parsed.query) if parsed.query else "")
+        except Exception:
+            pass
+        text = f"{left} · {rest}" if rest else left
+    if len(text) > 88:
+        text = text[:42] + "…" + text[-42:]
+    return text or "/"
+
+
+class _DynamicScanWorker(QObject):
+    progress = pyqtSignal(int, int, str)
+    done = pyqtSignal(object)
+
+    def __init__(self, url: str):
+        super().__init__()
+        self._url = url
+
+    def run(self):
+        try:
+            from core.scan_manager import run_scan
+            result = run_scan(self._url, on_progress=self._on_progress)
+        except Exception as exc:
+            result = {"error": f"Error calling backend: {exc}"}
+        self.done.emit(result)
+
+    def _on_progress(self, done, total, label):
+        self.progress.emit(int(done or 0), int(total or 0), str(label or ""))
 
 
 class CreateScanPage(QWidget):
@@ -211,8 +247,9 @@ class CreateScanPage(QWidget):
         """)
         layout.addWidget(self.progress)
         self.status_label = QLabel("Ready to scan.")
+        self.status_label.setWordWrap(True)
         self.status_label.setStyleSheet(
-            "color: #64748b; background: transparent; border: none;"
+            "color: #334155; background: transparent; border: none;"
         )
         layout.addWidget(self.status_label)
         layout.addStretch(1)
@@ -630,38 +667,57 @@ class CreateScanPage(QWidget):
         self._findings = []
         self._scan_gen += 1
         gen = self._scan_gen
-        self.update_status(f"Sending URL to backend: {url}")
-        try:
-            from core.scan_manager import run_scan
-            result = run_scan(url)
-            if isinstance(result, dict) and result.get("error"):
-                self._fail_dynamic(self._format_scan_error(result.get("error")))
-                return
-            if not isinstance(result, list):
-                self._fail_dynamic("Unexpected response from backend")
-                return
-            self._findings = _start_scan_only(_enrich(result))
-        except Exception as e:
-            self._fail_dynamic(f"Error calling backend: {e}")
-            return
-        if gen != self._scan_gen or self._scan_failed:
-            return
-        self.update_status("Backend is processing the target...")
-        self._progress_value = 0
-        self._stop_timer()
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(lambda: self._update_progress(gen))
-        self._timer.start(25)
+        self._progress_value = 6
+        self.progress.setValue(6)
+        self.update_status(f"Scanning  {_short_scan_path(url)}")
+        self._start_dynamic_worker(url, gen)
 
-    def _update_progress(self, gen: int):
+    def _start_dynamic_worker(self, url: str, gen: int):
+        thread = QThread(self)
+        worker = _DynamicScanWorker(url)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(
+            lambda done, total, label, g=gen: self._on_dynamic_progress(g, done, total, label)
+        )
+        worker.done.connect(
+            lambda result, g=gen: self._on_dynamic_worker_done(g, result)
+        )
+        worker.done.connect(thread.quit)
+        worker.done.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self._scan_thread = thread
+        self._scan_worker = worker
+        thread.start()
+
+    def _on_dynamic_progress(self, gen: int, done: int, total: int, label: str):
         if gen != self._scan_gen or self._scan_failed:
-            self._stop_timer()
             return
-        self._progress_value += 10
-        self.progress.setValue(min(self._progress_value, 100))
-        if self._progress_value >= 100:
-            self._stop_timer()
-            self._save_and_finish_dynamic(gen)
+        shown = _short_scan_path(label)
+        if total > 0:
+            page_pct = min(92, max(6, int(done * 92 / max(total, 1))))
+            self._progress_value = max(self._progress_value, page_pct)
+            self.update_status(f"Scanning {done}/{total}  {shown}")
+        else:
+            self._progress_value = min(90, self._progress_value + 1)
+            self.update_status(f"Scanning  {shown}")
+        self.progress.setValue(self._progress_value)
+
+    def _on_dynamic_worker_done(self, gen: int, result):
+        self._scan_worker = None
+        if gen != self._scan_gen or self._scan_failed:
+            self.scan_button.setEnabled(True)
+            return
+        if isinstance(result, dict) and result.get("error"):
+            self._fail_dynamic(self._format_scan_error(result.get("error")))
+            return
+        if not isinstance(result, list):
+            self._fail_dynamic("Unexpected response from backend")
+            return
+        self._findings = _start_scan_only(_enrich(result))
+        self.progress.setValue(96)
+        self.update_status("Saving scan results...")
+        self._save_and_finish_dynamic(gen)
 
     def _save_and_finish_dynamic(self, gen: int):
         if gen != self._scan_gen or self._scan_failed:
@@ -726,10 +782,12 @@ class CreateScanPage(QWidget):
                 SharedState.findings = returned or findings
             session_n = _display_finding_count(findings)
         except Exception as e:
+            self.progress.setValue(100)
             self.update_status(f"Scan completed (DB save warning: {e})")
             self.scan_button.setEnabled(True)
             self.scan_finished.emit()
             return
+        self.progress.setValue(100)
         self.scan_button.setEnabled(True)
         if session_n == 0:
             self.update_status("Scan completed successfully — no issues found | WebSET")

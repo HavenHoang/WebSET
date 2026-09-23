@@ -1,4 +1,5 @@
 from __future__ import annotations
+import time
 import html
 import json
 import re
@@ -13,11 +14,15 @@ SQL_COMMENT = "';--"
 NOSQL_QUERY = "[$ne]="
 MAX_PROBES = 80
 _ORIGIN_WIDE_TRIES: dict[str, int] = {}
+_DOM_TRIED: set[str] = set()
 _MAX_WIDE_TRIES = 3
+_PROBE_TIMEOUT = 3.0
+_INJECT_BUDGET_SEC = 20.0
 
 
 def reset_origin_wide_probes() -> None:
     _ORIGIN_WIDE_TRIES.clear()
+    _DOM_TRIED.clear()
 _CMD_PARAM_RE = re.compile(
     r"^(ip|host|hostname|cmd|command|exec|ping|target|addr|ipaddress)$",
     re.I,
@@ -108,6 +113,10 @@ VERBOSE_ERROR_SIGNATURES = (
 _SCRIPT_OPEN = re.compile(r"<\s*script\b[^>]*>", re.IGNORECASE)
 _SCRIPT_CLOSE = re.compile(r"<\s*/\s*script\s*>", re.IGNORECASE)
 _SCRIPT_SRC_RE = re.compile(r"""<script[^>]+src=['"]([^'"]+)['"]""", re.I)
+_MODULEPRELOAD_RE = re.compile(
+    r"""<link[^>]+rel=['"](?:modulepreload|preload)['"][^>]+href=['"]([^'"]+\.m?js)['"]""",
+    re.I,
+)
 _HREF_RE = re.compile(r"""(?:href|src|action)\s*=\s*['"]([^'"]+)['"]""", re.I)
 _QUERY_URL_RE = re.compile(
     r"""['"]((?:https?:)?//[^'"]+\?[^'"]+|/[A-Za-z0-9_./-]*\?[A-Za-z0-9_.=&%-]+)['"]""",
@@ -168,21 +177,6 @@ _GENERIC_AUTH_PATHS = (
     "/rest/user/login",
     "/rest/users/login",
     "/rest/auth/login",
-)
-_GENERIC_SEARCH_PATHS = (
-    "/search",
-    "/api/search",
-    "/api/products/search",
-    "/products/search",
-    "/catalog/search",
-    "/rest/search",
-    "/rest/products/search",
-    "/rest/product/search",
-)
-_GENERIC_HASH_SEARCH = (
-    "/#/search",
-    "/#!/search",
-    "/#search",
 )
 _TRAVERSAL_PROBES = (
     "../" * 8 + "etc/passwd",
@@ -508,14 +502,17 @@ def _merge_probe_fields(base: dict, param: dict, probe: str) -> dict:
     return out
 def _param_priority(param: dict) -> int:
     name = str(param.get("name") or "")
+    path = urlparse(str(param.get("url") or "")).path.lower()
+    if any(tok in path for tok in ("search", "find", "query")):
+        return -2
+    if _SEARCH_PARAM_RE.match(name):
+        return -1
     if _ID_PARAM_RE.match(name):
         return 0
     if _FILE_PARAM_RE.match(name):
         return 1
     if _CMD_PARAM_RE.match(name):
         return 2
-    if _SEARCH_PARAM_RE.match(name):
-        return 3
     return 4
 def _param_visible(param: dict, body: str, page_url: str = "") -> bool:
     # Off-page harvested / generic search params MUST still be probed.
@@ -585,6 +582,19 @@ def _rule_finding(*args, **kwargs):
     except Exception as exc:
         print("injection_checks finding:", exc)
         return None
+def _reflection_outside_warning(body: str, value: str) -> bool:
+    """Ignore a marker that only appears inside a PHP include warning."""
+    if not body or not value or value not in body:
+        return False
+    for line in body.splitlines():
+        if value not in line:
+            continue
+        if re.search(r"warning\s*:|failed opening|failed to open stream", line, re.I):
+            continue
+        return True
+    return False
+
+
 def check_reflected_input(ctx: HttpContext, params) -> list[dict]:
     body = ctx.body or ""
     if not body:
@@ -598,6 +608,12 @@ def check_reflected_input(ctx: HttpContext, params) -> list[dict]:
         if _is_only_html_encoded(body, value):
             continue
         if not _marker_reflected(body, value) and not _marker_reflected(body, XSS_MARKER):
+            continue
+        reflected = value if value in body else XSS_MARKER
+        if "<" in reflected and not _reflection_outside_warning(body, reflected):
+            continue
+        if "<" not in reflected and "<" not in reflected.lower():
+            # A plain word echoed in the page is not an XSS sink.
             continue
         offsets = _reflection_offsets(body, value) or _reflection_offsets(body, XSS_MARKER)
         contexts = sorted({_context_at(body, off) for off in offsets}) if offsets else ["json"]
@@ -615,6 +631,13 @@ def check_reflected_input(ctx: HttpContext, params) -> list[dict]:
             ),
         )
         if item:
+            comps = param.get("companions")
+            if isinstance(comps, dict) and comps:
+                item["companions"] = {
+                    str(k): "" if v is None else str(v)
+                    for k, v in comps.items()
+                    if str(k or "").strip()
+                }
             findings.append(item)
     return findings
 def find_sql_error_signature(body: str) -> tuple[str, str] | None:
@@ -775,7 +798,7 @@ def _cookie_header(cookies) -> str:
         seen.add(name)
         parts.append(f"{name}={value}")
     return "; ".join(parts)
-def _send(method: str, url: str, body: str | None = None, content_type: str | None = None, cookies=None, files=None, extra_headers=None) -> dict:
+def _send(method: str, url: str, body: str | None = None, content_type: str | None = None, cookies=None, files=None, extra_headers=None, timeout: float | None = None) -> dict:
     try:
         import requests
         headers = {"User-Agent": "WebSET-Scanner/1.0", "Connection": "close"}
@@ -792,7 +815,7 @@ def _send(method: str, url: str, body: str | None = None, content_type: str | No
             headers=headers,
             data=body,
             files=files,
-            timeout=10,
+            timeout=timeout if timeout is not None else _PROBE_TIMEOUT,
             allow_redirects=False,
         )
         try:
@@ -884,20 +907,22 @@ def _probe_param(ctx: HttpContext, param: dict, cookies=None, page_body: str = "
     existing = str(param.get("value") or "").strip()
     if (
         not existing
-        or existing in (XSS_MARKER, SQL_PROBE, SQL_COMMENT, SQL_TAUTOLOGY)
+        or existing in (XSS_MARKER, SQL_PROBE, SQL_COMMENT, SQL_TAUTOLOGY, "<WebSETXSS123>")
         or "'" in existing
-        or existing.startswith((";", "|", "&"))
+        or existing.startswith((";", "|", "&", "<"))
         or len(existing) > 80
     ):
         existing = "1" if _ID_PARAM_RE.match(name) else "webset"
-    method, xss_url, xss_body, xss_type = _apply_probe(param, fallback, XSS_MARKER)
-    xss_resp = _send(method, xss_url, xss_body, xss_type, cookies=cookies)
-    if xss_resp.get("ok") and xss_resp.get("body"):
-        probe_ctx = HttpContext.from_fetch(xss_resp, requested_url=fallback)
-        tagged = dict(param)
-        tagged["value"] = XSS_MARKER
-        tagged["url"] = sink
-        findings.extend(check_reflected_input(probe_ctx, [tagged]))
+    if not (_SUBMIT_KEY_RE.search(name) or name.lower() in {"user_token", "csrftoken", "csrf"}):
+        xss_probe = "<WebSETXSS123>"
+        method, xss_url, xss_body, xss_type = _apply_probe(param, fallback, xss_probe)
+        xss_resp = _send(method, xss_url, xss_body, xss_type, cookies=cookies)
+        if xss_resp.get("ok") and xss_resp.get("body"):
+            probe_ctx = HttpContext.from_fetch(xss_resp, requested_url=fallback)
+            tagged = dict(param)
+            tagged["value"] = xss_probe
+            tagged["url"] = sink
+            findings.extend(check_reflected_input(probe_ctx, [tagged]))
     sql_eligible = not (
         _FILE_PARAM_RE.match(name)
         or _CMD_PARAM_RE.match(name)
@@ -1083,35 +1108,45 @@ def _current_page_params(page_url: str, body: str) -> list[dict]:
             "source": "form",
         })
     return out
-def _generic_search_params(page_url: str) -> list[dict]:
-    origin = _origin(page_url)
-    if not origin:
-        return []
-    return [
-        {
-            "name": "q",
-            "value": "",
-            "location": "query",
-            "method": "GET",
-            "url": urljoin(origin + "/", path.lstrip("/")),
-            "source": "search",
-        }
-        for path in _GENERIC_SEARCH_PATHS
-    ]
-def _harvest_script_text(page_url: str, body: str, limit: int = 4, cookies=None) -> str:
+def _script_fetch_rank(url: str) -> int:
+    name = (urlparse(url).path or "").rsplit("/", 1)[-1].lower()
+    if name.startswith("main") or "main." in name:
+        return 0
+    if name.startswith("app") or "bundle" in name:
+        return 1
+    if "chunk" in name or "vendor" in name:
+        return 2
+    if "polyfill" in name or "runtime" in name or name.startswith("styles"):
+        return 8
+    return 5
+
+
+def _harvest_script_text(page_url: str, body: str, limit: int = 6, cookies=None) -> str:
+    """Download same-host scripts the page actually references. No path guessing."""
     origin = _origin(page_url)
     chunks = [body or ""]
     seen = set()
-    for raw in _SCRIPT_SRC_RE.findall(body or ""):
+    urls = []
+    refs = list(_SCRIPT_SRC_RE.findall(body or "")) + list(_MODULEPRELOAD_RE.findall(body or ""))
+    for raw in refs:
         url = _abs_url(raw, origin)
         if not url or url in seen:
             continue
+        if url.lower().endswith(".map"):
+            continue
         seen.add(url)
-        resp = _send("GET", url, cookies=cookies)
-        if resp.get("ok") and resp.get("body"):
-            chunks.append(str(resp["body"])[:200000])
-        if len(chunks) > limit:
+        urls.append(url)
+    urls.sort(key=_script_fetch_rank)
+    total = 0
+    cap = 4_000_000
+    for url in urls[:limit]:
+        if total >= cap:
             break
+        resp = _send("GET", url, cookies=cookies, timeout=8.0)
+        if resp.get("ok") and resp.get("body"):
+            piece = str(resp["body"])[: cap - total]
+            chunks.append(piece)
+            total += len(piece)
     return "\n".join(chunks)
 def _extract_bearer(resp: dict) -> str:
     text = str((resp or {}).get("body") or "")
@@ -1482,71 +1517,82 @@ def _probe_xml_xxe(page_url: str, cookies=None) -> list[dict]:
                 findings.append(item)
             break
     return findings
-def _probe_dom_xss(page_url: str, cookies=None, body: str = "") -> list[dict]:
+def _dom_xss_from_script(page_url: str, script: str) -> list[dict]:
+    """
+    DOM XSS from the script that was actually downloaded.
+    A query parameter variable must be passed into an HTML sink
+    (innerHTML, document.write, insertAdjacentHTML, or a sanitizer bypass)
+    in the same function. No path list and no browser.
+    """
     origin = _origin(page_url)
-    if not origin:
+    text = script or ""
+    if not origin or not text:
         return []
-    try:
-        from crawler.browser import fetch_with_selenium
-    except Exception:
-        return []
+    assign_re = re.compile(
+        r"(?:let|var|const)\s+([A-Za-z_$][\w$]*)\s*=\s*[^;]{0,180}?"
+        r"(?:queryParams|searchParams)\.([A-Za-z_$][\w$]*)"
+    )
+    sink_re = re.compile(
+        r"bypassSecurityTrustHtml\s*\(\s*([A-Za-z_$][\w$]*)\s*\)"
+        r"|insertAdjacentHTML\s*\([^,]+,\s*([A-Za-z_$][\w$]*)\s*\)"
+        r"|document\.write(?:ln)?\s*\(\s*([A-Za-z_$][\w$]*)\s*\)"
+        r"|\.innerHTML\s*=\s*([A-Za-z_$][\w$]*)\s*[;,)]"
+    )
+    route_re = re.compile(
+        r"""path\s*:\s*(['"`])([^'"`]+)\1\s*,\s*component\s*:\s*([A-Za-z_$][\w$]*)"""
+    )
+    hash_mode = bool(re.search(r"useHash\s*:\s*(?:!0|true)|HashLocationStrategy", text))
+    routes = route_re.findall(text)
     findings = []
     seen = set()
-    candidates = [f"{origin}{path}?q={XSS_MARKER}" for path in _GENERIC_HASH_SEARCH]
-    candidates.append(f"{origin}/?q={XSS_MARKER}")
-    parsed_origin = urlparse(origin)
-    for raw in _HASH_ROUTE_RE.findall(body or ""):
-        abs_u = _hash_to_http(raw if str(raw).startswith("#") else "#" + str(raw), origin)
-        parsed = urlparse(abs_u)
-        q = dict(parse_qsl(parsed.query, keep_blank_values=True))
-        names = list(q) or ["id", "q"]
-        for name in names:
-            qq = dict(q)
-            qq[name] = XSS_MARKER
-            candidates.append(
-                urlunparse((
-                    parsed.scheme or parsed_origin.scheme,
-                    parsed.netloc or parsed_origin.netloc,
-                    parsed.path or "/",
-                    "",
-                    urlencode(qq),
-                    "",
-                ))
-            )
-    for url in candidates:
-        if not url or url in seen:
+    for match in assign_re.finditer(text):
+        ident, param = match.group(1), match.group(2)
+        if not param or param.lower() in ("length", "then", "catch"):
             continue
-        seen.add(url)
-        try:
-            rendered = fetch_with_selenium(url, timeout=15.0, cookies=cookies)
-        except TypeError:
-            try:
-                rendered = fetch_with_selenium(url, timeout=15.0)
-            except Exception:
+        window = text[match.end(): match.end() + 800]
+        used = ""
+        for sink in sink_re.finditer(window):
+            name = next((g for g in sink.groups() if g), "")
+            if name == ident:
+                used = sink.group(0)
+                break
+        if not used:
+            continue
+        paths = []
+        for _q, raw_path, comp in routes:
+            pos = text.rfind("var " + comp + "=", 0, match.start() + 1)
+            if pos < 0 or match.start() - pos > 50000:
                 continue
-        except Exception:
+            path = "/" + str(raw_path or "").strip("/")
+            if not path or path == "/" or "*" in path or ":" in path:
+                continue
+            paths.append(path)
+        if not paths:
             continue
-        page = rendered.get("body") or ""
-        if not rendered.get("ok") or XSS_MARKER not in page:
+        paths.sort(key=lambda p: (0 if re.search(r"search|find|query|result", p, re.I) else 1, len(p)))
+        path = paths[0]
+        loc = (origin + "/#" + path) if hash_mode else (origin + path)
+        key = (param.lower(), loc)
+        if key in seen:
             continue
-        parsed = urlparse(url)
-        q = dict(parse_qsl(parsed.query, keep_blank_values=True))
-        param = next((k for k, v in q.items() if v == XSS_MARKER), "q")
+        seen.add(key)
         item = _rule_finding(
             "xss-reflected",
-            url=url.split("?")[0],
+            url=loc,
             param=param,
             vuln_type="xss",
             method="GET",
             param_location="query",
             context="html_body",
-            evidence="marker present in rendered DOM",
+            evidence=(
+                f"query parameter {param} is passed to an HTML sink "
+                f"({used.split('(')[0]}) in the client script for {path}"
+            ),
         )
         if item:
             findings.append(item)
-        break
     return findings
-def _collect_params(ctx: HttpContext, params=None, forms=None, artefact=None) -> list[dict]:
+def _collect_params(ctx: HttpContext, params=None, forms=None, artefact=None, script_blob: str = "") -> list[dict]:
     collected: list[dict] = []
     if params and not _looks_artefact(params):
         collected.extend(params)
@@ -1584,19 +1630,39 @@ def _collect_params(ctx: HttpContext, params=None, forms=None, artefact=None) ->
                 })
     except Exception:
         pass
-    collected.extend(_generic_search_params(ctx.requested_url or ctx.url))
     collected.extend(_current_page_params(ctx.requested_url or ctx.url, body))
     ordered = _dedupe_params(collected)
     _attach_sibling_fields(ordered)
     ordered.sort(key=_param_priority)
     return ordered
+_SCAN_PROGRESS = None
+
+
+def set_scan_progress(callback) -> None:
+    global _SCAN_PROGRESS
+    _SCAN_PROGRESS = callback
+
+
+def _tick_scan_progress(param: dict, index: int, total: int) -> None:
+    callback = _SCAN_PROGRESS
+    if callback is None:
+        return
+    url = str((param or {}).get("url") or "")
+    name = str((param or {}).get("name") or "").strip()
+    label = f"{url} · {name}" if url and name else (url or name)
+    try:
+        callback(0, 0, label)
+    except Exception:
+        pass
+
+
 def run_injection_checks(ctx: HttpContext, params=None, forms=None, artefact=None) -> list[dict]:
+    started = time.time()
     if not ctx or not ctx.ok or not ctx.url:
         return []
     if artefact is None and _looks_artefact(params):
         artefact = params
         params = None
-    collected = _collect_params(ctx, params=params, forms=forms, artefact=artefact)
     cookies = _cookies_from_ctx(ctx, artefact)
     page_body = ""
     if isinstance(artefact, dict):
@@ -1609,6 +1675,26 @@ def run_injection_checks(ctx: HttpContext, params=None, forms=None, artefact=Non
         except Exception as exc:
             print(f"injection_checks {label}:", exc)
             return []
+    script_blob = _harvest_script_text(
+        ctx.requested_url or ctx.url, page_body, cookies=cookies
+    )
+    if not isinstance(script_blob, str) or not script_blob:
+        script_blob = page_body
+    sinks = {"params": [], "hash_paths": [], "hash_params": []}
+    try:
+        from crawler.param_discover import discover_script_sinks
+        sinks = discover_script_sinks(script_blob, ctx.requested_url or ctx.url) or sinks
+    except Exception as exc:
+        print("injection_checks script_sinks:", exc)
+    collected = _collect_params(
+        ctx, params=params, forms=forms, artefact=artefact
+    )
+    collected.extend(sinks.get("params") or [])
+    collected = _dedupe_params(collected)
+    _attach_sibling_fields(collected)
+    collected.sort(key=_param_priority)
+    # Probe clock starts after JS harvest so discovery does not eat the inject budget.
+    started = time.time()
     findings.extend(_safe("reflected", lambda: check_reflected_input(ctx, collected)))
     _q = urlparse(str(ctx.raw_url or ctx.url or "")).query.lower()
     if "'" in (ctx.raw_url or ctx.url or "") or "%27" in _q or " or " in _q:
@@ -1633,29 +1719,28 @@ def run_injection_checks(ctx: HttpContext, params=None, forms=None, artefact=Non
                 continue
             seen.add(key)
             findings.append(item)
+    origin_key = _origin(ctx.requested_url or ctx.url)
+    if origin_key and origin_key not in _DOM_TRIED:
+        _DOM_TRIED.add(origin_key)
+        _add(_safe("dom_xss", lambda: _dom_xss_from_script(
+            ctx.requested_url or ctx.url,
+            script_blob if isinstance(script_blob, str) else "",
+        )))
     probed = 0
     for param in collected:
         if probed >= MAX_PROBES:
             break
+        if (time.time() - started) >= _INJECT_BUDGET_SEC:
+            break
         if not _param_visible(param, page_body):
             continue
         probed += 1
+        _tick_scan_progress(param, probed, min(len(collected), MAX_PROBES))
         _add(_safe("probe", lambda p=param: _probe_param(ctx, p, cookies=cookies, page_body=page_body)))
-    script_blob = _safe(
-        "scripts",
-        lambda: _harvest_script_text(ctx.requested_url or ctx.url, page_body, cookies=cookies),
-    )
-    if not isinstance(script_blob, str):
-        script_blob = page_body
-    _add(_safe("dom_xss", lambda: _probe_dom_xss(
-        ctx.requested_url or ctx.url,
-        cookies=cookies,
-        body=script_blob if isinstance(script_blob, str) else page_body,
-    )))
     origin_key = _origin(ctx.requested_url or ctx.url)
     path = urlparse(str(ctx.requested_url or ctx.url or "")).path.rstrip("/") or "/"
     used = _ORIGIN_WIDE_TRIES.get(origin_key, 0) if origin_key else _MAX_WIDE_TRIES
-    if origin_key and used < _MAX_WIDE_TRIES and (
+    if origin_key and used < _MAX_WIDE_TRIES and (time.time() - started) < _INJECT_BUDGET_SEC and (
         used < 1 or path == "/" or "upload" in path.lower() or "review" in path.lower()
     ):
         _ORIGIN_WIDE_TRIES[origin_key] = used + 1
@@ -1666,6 +1751,7 @@ def run_injection_checks(ctx: HttpContext, params=None, forms=None, artefact=Non
 
 def run_origin_wide_checks(ctx: HttpContext, artefact=None) -> list[dict]:
     """XXE / JSON auth / NoSQL surfaces — once per scan, after crawl."""
+    started = time.time()
     if not ctx or not (getattr(ctx, "url", None) or getattr(ctx, "requested_url", None)):
         return []
     cookies = _cookies_from_ctx(ctx, artefact)
@@ -1698,6 +1784,8 @@ def run_origin_wide_checks(ctx: HttpContext, artefact=None) -> list[dict]:
     auth_urls.extend(_generic_auth_urls(start))
     bearer = ""
     for auth_url in list(dict.fromkeys(u for u in auth_urls if u))[:4]:
+        if (time.time() - started) >= _INJECT_BUDGET_SEC:
+            break
         for field in ("email", "username"):
             _add(_safe("json_sqli", lambda u=auth_url, f=field: _probe_json_sqli(u, f, cookies=cookies)))
             _add(_safe("json_nosqli", lambda u=auth_url, f=field: _probe_json_nosqli(u, f, cookies=cookies)))
@@ -1705,6 +1793,8 @@ def run_origin_wide_checks(ctx: HttpContext, artefact=None) -> list[dict]:
                 token = _login_bearer(auth_url, field, cookies=cookies)
                 if isinstance(token, str) and token:
                     bearer = token
-    _add(_safe("nosql_surfaces", lambda: _probe_nosql_surfaces(start, cookies=cookies, bearer=bearer)))
-    _add(_safe("xxe", lambda: _probe_xml_xxe(start, cookies=cookies)))
+    if (time.time() - started) < _INJECT_BUDGET_SEC:
+        _add(_safe("nosql_surfaces", lambda: _probe_nosql_surfaces(start, cookies=cookies, bearer=bearer)))
+    if (time.time() - started) < _INJECT_BUDGET_SEC:
+        _add(_safe("xxe", lambda: _probe_xml_xxe(start, cookies=cookies)))
     return findings

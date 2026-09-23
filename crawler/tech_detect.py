@@ -43,6 +43,8 @@ def _version_of(name: str, *blobs: str) -> str:
     return match.group(1) if match else ""
 def _looks_spa(body: str) -> bool:
     text = (body or "").lower()
+    if len(text) >= 8000:
+        return False
     return any(
         token in text
         for token in (
@@ -71,6 +73,27 @@ def _origin(url: str) -> str:
     if not p.netloc:
         return ""
     return f"{p.scheme or 'http'}://{p.netloc}"
+def _stack_names(found: list) -> set:
+    return {str(item.get("name") or "").lower() for item in (found or [])}
+def _should_probe_wordpress(found: list, body_lc: str) -> bool:
+    names = _stack_names(found)
+    blob = body_lc or ""
+    return any(
+        token in names or token in blob
+        for token in (
+            "php", "wordpress", "wp-content", "wp-includes", "wp-json",
+            "laravel", "phpsessid",
+        )
+    )
+def _should_probe_node(found: list, body_lc: str) -> bool:
+    names = _stack_names(found)
+    blob = body_lc or ""
+    return any(
+        token in names or token in blob
+        for token in (
+            "node.js", "node", "express", "socket.io", "angular", "engine.io",
+        )
+    )
 def _scan(headers_lc: dict, body_lc: str, host: str, neutral: bool, cookies_lc: str = "") -> list:
     found, seen = [], set()
     def add(name, cat, version, desc):
@@ -268,7 +291,6 @@ def _probe_php_wordpress(url: str, found: list) -> list:
                     "wp-json", "wp-embed", "generator",
                 )
             )
-            # xmlrpc often returns 405 with a short XML/HTML body mentioning xmlrpc
             if path.endswith("xmlrpc.php") and status in (200, 405):
                 hit = hit or "xml" in blob or status == 405
             if path.endswith("readme.html") and "wordpress" not in blob:
@@ -291,8 +313,6 @@ def _probe_php_wordpress(url: str, found: list) -> list:
                     ))
                     names.add("php")
     return found
-
-
 def detect_tech_stack(url: str) -> list:
     url = normalise_url(url)
     if not is_http_url(url):
@@ -309,12 +329,18 @@ def detect_tech_stack(url: str) -> list:
         if browser_page.get("ok"):
             headers, body_lc, host, cookies = _merge_pages(page, browser_page)
             found = _scan(headers, body_lc, host or url, True, cookies)
-            found = _probe_php_wordpress(url, found)
-            return _probe_node_stack(url, found)
+            if _should_probe_wordpress(found, body_lc):
+                found = _probe_php_wordpress(url, found)
+            if _should_probe_node(found, body_lc):
+                found = _probe_node_stack(url, found)
+            return found
     headers, body_lc, cookies = _lc(page)
     found = _scan(headers, body_lc, url, bool(page.get("ok")), cookies)
-    found = _probe_php_wordpress(url, found)
-    return _probe_node_stack(url, found)
+    if _should_probe_wordpress(found, body_lc):
+        found = _probe_php_wordpress(url, found)
+    if _should_probe_node(found, body_lc):
+        found = _probe_node_stack(url, found)
+    return found
 def detect_tech_from_page(page: dict) -> list:
     headers, body, cookies = _lc(page)
     return _scan(headers, body, page.get("url", ""), False, cookies)

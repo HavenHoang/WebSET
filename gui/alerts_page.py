@@ -94,6 +94,7 @@ def _target_from_finding(f: dict) -> dict:
         ),
         "context": str(f.get("context") or ""),
         "vuln_type": _infer_vuln_type(f),
+        "companions": dict(f.get("companions") or {}),
     }
 
 

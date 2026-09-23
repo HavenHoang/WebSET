@@ -184,13 +184,22 @@ def _try_lab_login(driver) -> None:
 def fetch_with_selenium(
     url: str,
     *,
-    timeout: float = 20.0,
+    timeout: float = 12.0,
     cookies: list | None = None,
+    wait_text: str | None = None,
+    skip_login: bool = False,
 ) -> dict:
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
     from selenium.webdriver.support.ui import WebDriverWait
+    raw_url = url
     url = normalise_url(url)
+    try:
+        frag = urlparse(str(raw_url) if "://" in str(raw_url) else "http://" + str(raw_url)).fragment
+    except Exception:
+        frag = ""
+    if frag:
+        url = url + "#" + frag
     opts = Options()
     for a in (
         "--headless=new",
@@ -199,31 +208,64 @@ def fetch_with_selenium(
         "--disable-dev-shm-usage",
         "--window-size=1280,900",
         "--disable-background-networking",
+        "--disable-extensions",
+        "--blink-settings=imagesEnabled=false",
+        "--disable-notifications",
     ):
         opts.add_argument(a)
-    opts.page_load_strategy = "normal"
+    # eager = DOM ready, do not wait for every third-party script (ads, trackers)
+    opts.page_load_strategy = "eager"
     driver = None
     t0 = time.time()
     try:
         driver = webdriver.Chrome(options=opts)
         driver.set_page_load_timeout(timeout)
-        driver.set_script_timeout(timeout)
+        driver.set_script_timeout(min(timeout, 8.0))
         _apply_cookies(driver, url, cookies)
         driver.get(url)
-        WebDriverWait(driver, min(timeout, 12)).until(
-            lambda d: d.execute_script("return document.readyState") == "complete"
-        )
-        time.sleep(1.2 if "#" in (url or "") else 0.4)
-        _try_lab_login(driver)
+        if frag and wait_text:
+            try:
+                driver.execute_script("window.location.hash = arguments[0];", frag)
+            except Exception:
+                pass
+        deadline = time.time() + max(1.0, float(timeout))
         try:
-            inner = driver.execute_script(
-                "return document.documentElement ? document.documentElement.outerHTML : '';"
-            ) or ""
+            WebDriverWait(driver, min(float(timeout), 6)).until(
+                lambda d: d.execute_script("return document.readyState")
+                in ("interactive", "complete")
+            )
         except Exception:
+            pass
+        if wait_text:
+            needle = str(wait_text).lower()
             inner = ""
-        body = inner or (driver.page_source or "")
-        hrefs = _dom_hrefs(driver)
-        body = _hrefs_into_body(body, hrefs)
+            while time.time() < deadline:
+                try:
+                    inner = driver.execute_script(
+                        "return document.documentElement ? document.documentElement.outerHTML : '';"
+                    ) or ""
+                except Exception:
+                    inner = ""
+                if needle and needle in inner.lower():
+                    break
+                time.sleep(0.4)
+        else:
+            time.sleep(0.25)
+        if not skip_login:
+            _try_lab_login(driver)
+        if not wait_text:
+            try:
+                inner = driver.execute_script(
+                    "return document.documentElement ? document.documentElement.outerHTML : '';"
+                ) or ""
+            except Exception:
+                inner = ""
+        if wait_text:
+            body = inner or ""
+        else:
+            body = inner or (driver.page_source or "")
+            hrefs = _dom_hrefs(driver)
+            body = _hrefs_into_body(body, hrefs)
         final_url = driver.current_url or url
         collected = []
         try:

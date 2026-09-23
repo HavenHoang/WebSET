@@ -363,6 +363,8 @@ def _parse_url_parts(url: str) -> tuple[str, str]:
         path = p.path or "/"
         if not path.startswith("/"):
             path = "/" + path
+        if p.fragment:
+            path = path + "#" + p.fragment
         return host, path
     except Exception:
         host = raw.replace("https://", "").replace("http://", "")
@@ -1299,17 +1301,26 @@ def _classify_test_result(vtype: str, request_text: str, response_text: str, tes
         elif str(status_code) == "500":
             signal = "Server error — no XML parser signature"
     elif vtype == "xss":
-        if _yes(found) and not _yes(encoded):
-            signal = "Probe reflected unencoded"
+        client_sink = "html sink" in (text or "").lower() or "client script" in (text or "").lower()
+        if client_sink and confirmation == "CONFIRMED":
+            signal = "Value reaches an HTML sink unencoded"
+        elif _yes(found) and not _yes(encoded):
+            signal = "Value reaches an HTML sink unencoded" if client_sink else "Probe reflected unencoded"
         elif _yes(found) and _yes(encoded):
             signal = "Probe reflected encoded"
     elif vtype == "path_traversal":
+        included = any(
+            s in (text or "").lower()
+            for s in ("include(", "require(", "failed opening", "for inclusion")
+        )
         for sign in ("root:x:", "root:*:", "[boot loader]", "for 16-bit app support"):
             if sign in body_lower:
                 confirmed = True
                 signal = "File contents disclosed"
                 break
-        if not confirmed and _yes(found):
+        if not confirmed and (confirmation == "CONFIRMED" or included):
+            signal = "Path passed to file include"
+        elif not confirmed and _yes(found):
             signal = "Probe reflected — not distinctive"
     elif vtype == "command_injection":
         for sign in _CMD_INJECTION_SIGNS:
@@ -1328,7 +1339,12 @@ def _classify_test_result(vtype: str, request_text: str, response_text: str, tes
         confirmed = False
         level = "likely"
         if vtype == "xss":
-            signal = "Probe reflected — not exploit proof"
+            client_sink = "html sink" in (text or "").lower() or "client script" in (text or "").lower()
+            signal = (
+                "Value reaches an HTML sink — not exploit proof"
+                if client_sink
+                else "Probe reflected — not exploit proof"
+            )
         elif vtype == "sqli":
             if _yes(db_err):
                 signal = "Database error detected"
@@ -2182,6 +2198,8 @@ class PayloadTab(QWidget):
         self._active_finding["method"] = t.get("method") or "GET"
         if t.get("param_location"):
             self._active_finding["param_location"] = t.get("param_location")
+        if isinstance(t.get("companions"), dict):
+            self._active_finding["companions"] = dict(t.get("companions") or {})
         method = self._active_finding.get("method") or "GET"
         _, path = _parse_url_parts(str(self._active_finding.get("url") or ""))
         self.target_label.setText(f"{method}  {path}")
@@ -2446,6 +2464,13 @@ class PayloadTab(QWidget):
         self._apply_selected_target()
         finding = dict(self._active_finding or finding)
         finding["vuln_type"] = vtype
+        try:
+            from payload_injection.request_builder import ensure_form_companions
+            finding = ensure_form_companions(finding)
+            if finding.get("companions"):
+                self._active_finding["companions"] = dict(finding.get("companions") or {})
+        except Exception:
+            pass
         payload_label = _VTYPE_PAYLOAD_LABEL.get(vtype, "Custom")
         cookies = None
         try:

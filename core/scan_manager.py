@@ -199,8 +199,8 @@ def _apply_start_path(url: str, result):
     return result
 
 
-def run_scan(url: str):
-    return _apply_start_path(url, analyse_dynamic(url))
+def run_scan(url: str, on_progress=None):
+    return _apply_start_path(url, analyse_dynamic(url, on_progress=on_progress))
 
 
 def run_static_scan(zip_path: str) -> dict:
