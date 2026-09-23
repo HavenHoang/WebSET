@@ -590,6 +590,20 @@ def analyse_dynamic(
             on_progress=on_progress,
         )
     finally:
+        try:
+            from security_checks.injection_checks import (
+                end_origin_wide_probes as _end_inj,
+            )
+            _end_inj()
+        except Exception:
+            pass
+        try:
+            from security_checks.generic_surface_checks import (
+                end_origin_wide_probes as _end_surf,
+            )
+            _end_surf()
+        except Exception:
+            pass
         if set_scan_progress is not None:
             set_scan_progress(None)
 

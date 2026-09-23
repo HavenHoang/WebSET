@@ -1,16 +1,28 @@
 from __future__ import annotations
+import contextvars
 import json
 import time
 import re
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
-_ORIGIN_WIDE_TRIES: dict[str, int] = {}
+_PROBE_STATE: contextvars.ContextVar = contextvars.ContextVar(
+    "webset_surface_probe_state",
+    default=None,
+)
 _MAX_WIDE_TRIES = 3
 _PROBE_TIMEOUT = 3.0
 _SURFACE_BUDGET_SEC = 12.0
 
 
 def reset_origin_wide_probes() -> None:
-    _ORIGIN_WIDE_TRIES.clear()
+    _PROBE_STATE.set({"wide": {}})
+
+
+def end_origin_wide_probes() -> None:
+    _PROBE_STATE.set(None)
+
+
+def _probe_state() -> dict | None:
+    return _PROBE_STATE.get()
 from security_checks.finding_builder import (
     build_injection_rule_finding,
     build_passive_rule_finding,
@@ -1445,10 +1457,14 @@ def run_generic_surface_checks(ctx, artefact: dict | None = None) -> list[dict]:
         findings.extend(_surface_sqli_auth(origin, cookies=cookies))
         findings.extend(_surface_nosql(origin, cookies=cookies))
         findings.extend(_surface_idor(origin, cookies=cookies, artefact=artefact, start=start))
-    used = _ORIGIN_WIDE_TRIES.get(origin, 0) if origin else _MAX_WIDE_TRIES
+    state = _probe_state()
+    wide = state["wide"] if state is not None else {}
+    used = wide.get(origin, 0) if origin else _MAX_WIDE_TRIES
     if origin and used < _MAX_WIDE_TRIES:
-        _ORIGIN_WIDE_TRIES[origin] = used + 1
+        if state is not None:
+            wide[origin] = used + 1
         findings.extend(_client_validation_surface(ctx, artefact))
     return findings
 def run_lab_surface_checks(ctx, artefact: dict | None = None) -> list[dict]:
+    """Same checks as run_generic_surface_checks. Kept so older imports still resolve."""
     return run_generic_surface_checks(ctx, artefact)

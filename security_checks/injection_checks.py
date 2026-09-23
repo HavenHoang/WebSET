@@ -1,4 +1,5 @@
 from __future__ import annotations
+import contextvars
 import time
 import html
 import json
@@ -13,16 +14,25 @@ SQL_TAUTOLOGY = "' OR '1'='1'--"
 SQL_COMMENT = "';--"
 NOSQL_QUERY = "[$ne]="
 MAX_PROBES = 80
-_ORIGIN_WIDE_TRIES: dict[str, int] = {}
-_DOM_TRIED: set[str] = set()
+_PROBE_STATE: contextvars.ContextVar = contextvars.ContextVar(
+    "webset_injection_probe_state",
+    default=None,
+)
 _MAX_WIDE_TRIES = 3
 _PROBE_TIMEOUT = 3.0
 _INJECT_BUDGET_SEC = 20.0
 
 
 def reset_origin_wide_probes() -> None:
-    _ORIGIN_WIDE_TRIES.clear()
-    _DOM_TRIED.clear()
+    _PROBE_STATE.set({"wide": {}, "dom": set()})
+
+
+def end_origin_wide_probes() -> None:
+    _PROBE_STATE.set(None)
+
+
+def _probe_state() -> dict | None:
+    return _PROBE_STATE.get()
 _CMD_PARAM_RE = re.compile(
     r"^(ip|host|hostname|cmd|command|exec|ping|target|addr|ipaddress)$",
     re.I,
@@ -679,7 +689,7 @@ def _companion_names(param: dict) -> set[str]:
 
 
 def _is_auth_injection_param(param: dict) -> bool:
-    """Login/auth surface, not a lab path.
+    """Login/auth surface on whatever host is being scanned.
 
     JSON identity/secret fields are auth by location. HTML forms are auth
     only when an identity field and a password field appear together — a
@@ -1720,8 +1730,11 @@ def run_injection_checks(ctx: HttpContext, params=None, forms=None, artefact=Non
             seen.add(key)
             findings.append(item)
     origin_key = _origin(ctx.requested_url or ctx.url)
-    if origin_key and origin_key not in _DOM_TRIED:
-        _DOM_TRIED.add(origin_key)
+    state = _probe_state()
+    dom_tried = state["dom"] if state is not None else set()
+    if origin_key and origin_key not in dom_tried:
+        if state is not None:
+            dom_tried.add(origin_key)
         _add(_safe("dom_xss", lambda: _dom_xss_from_script(
             ctx.requested_url or ctx.url,
             script_blob if isinstance(script_blob, str) else "",
@@ -1739,11 +1752,14 @@ def run_injection_checks(ctx: HttpContext, params=None, forms=None, artefact=Non
         _add(_safe("probe", lambda p=param: _probe_param(ctx, p, cookies=cookies, page_body=page_body)))
     origin_key = _origin(ctx.requested_url or ctx.url)
     path = urlparse(str(ctx.requested_url or ctx.url or "")).path.rstrip("/") or "/"
-    used = _ORIGIN_WIDE_TRIES.get(origin_key, 0) if origin_key else _MAX_WIDE_TRIES
+    state = _probe_state()
+    wide = state["wide"] if state is not None else {}
+    used = wide.get(origin_key, 0) if origin_key else _MAX_WIDE_TRIES
     if origin_key and used < _MAX_WIDE_TRIES and (time.time() - started) < _INJECT_BUDGET_SEC and (
         used < 1 or path == "/" or "upload" in path.lower() or "review" in path.lower()
     ):
-        _ORIGIN_WIDE_TRIES[origin_key] = used + 1
+        if state is not None:
+            wide[origin_key] = used + 1
         for item in run_origin_wide_checks(ctx, artefact) or []:
             _add([item])
     return findings

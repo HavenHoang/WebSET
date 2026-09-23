@@ -203,14 +203,25 @@ def run_scan(url: str, on_progress=None):
     return _apply_start_path(url, analyse_dynamic(url, on_progress=on_progress))
 
 
-def run_static_scan(zip_path: str) -> dict:
-    result = analyse_static(zip_path)
+def run_static_scan(zip_path: str, on_progress=None) -> dict:
+    def tick(done, total, label):
+        if not on_progress:
+            return
+        try:
+            on_progress(done, total, label)
+        except Exception:
+            pass
+
+    tick(2, 100, zip_path)
+    result = analyse_static(zip_path, on_progress=on_progress)
     if not isinstance(result, dict):
         return {"error": "unreadable_zip"}
     if result.get("error"):
         return {"error": result["error"]}
     findings = result.get("findings") or []
+    tick(97, 100, zip_path)
     tech_stacks = detect_tech_stack_from_path(zip_path) or []
+    tick(99, 100, zip_path)
     return {"findings": findings, "tech_stacks": tech_stacks}
 
 

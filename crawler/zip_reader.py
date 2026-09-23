@@ -100,7 +100,7 @@ def list_zip_paths(zip_path: str, limit: int = 8000) -> list:
         return []
 
 
-def open_project_zip(zip_path: str, sample_limit: int = 250, sample_chars: int = 40000) -> dict:
+def open_project_zip(zip_path: str, sample_limit: int = 8000, sample_chars: int = 1000000, on_progress=None) -> dict:
     path = zip_path or ""
     if not path or not os.path.isfile(path) or not zipfile.is_zipfile(path):
         return {"ok": False, "error": "invalid_zip", "paths": [], "sample_texts": {}}
@@ -122,11 +122,17 @@ def open_project_zip(zip_path: str, sample_limit: int = 250, sample_chars: int =
                 }
             chosen = sorted(analysable, key=_priority)[:sample_limit]
             samples = {}
-            for n in chosen:
+            total = len(chosen)
+            for index, n in enumerate(chosen, 1):
                 try:
                     samples[n] = zf.read(n).decode("utf-8", "replace")[:sample_chars]
                 except Exception:
-                    continue
+                    pass
+                if on_progress and total and (index == 1 or index == total or index % 20 == 0):
+                    try:
+                        on_progress(index, total, n)
+                    except Exception:
+                        pass
             return {"ok": True, "error": None, "paths": names, "sample_texts": samples}
     except zipfile.BadZipFile:
         return {"ok": False, "error": "invalid_zip", "paths": [], "sample_texts": {}}

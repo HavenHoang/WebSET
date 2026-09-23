@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 
@@ -285,6 +286,14 @@ _DESER_API_PATTERN = re.compile(
     | new\s+ObjectInputStream
     """
 )
+_TAINT_SINKS = _TAINT_SINKS + (
+    ("static-sql-concat", _SQL_CONCAT_PATTERN),
+    ("static-html-sink", _HTML_SINK_PATTERN),
+    ("static-command-exec", _CMD_PATTERN),
+    ("static-path-sink", _PATH_SINK_PATTERN),
+    ("static-eval", _EVAL_PATTERN),
+    ("static-deser", _DESER_API_PATTERN),
+)
 _CORS_STAR_PATTERN = re.compile(
     r"""(?ix)
     Access-Control-Allow-Origin['"\s]*[:=]['"\s]*\*
@@ -429,17 +438,57 @@ def check_debug_flags(sample_texts: dict) -> list[dict]:
     return findings
 
 
+def _line_comment_open(prefix: str) -> bool:
+    quote = ""
+    i = 0
+    n = len(prefix)
+    while i < n:
+        ch = prefix[i]
+        if quote:
+            if ch == "\\" and quote != "`":
+                i += 2
+                continue
+            if ch == quote:
+                quote = ""
+            i += 1
+            continue
+        if ch in "'\"`":
+            quote = ch
+            i += 1
+            continue
+        if ch == "/" and i + 1 < n and prefix[i + 1] == "/" and not (i > 0 and prefix[i - 1] == ":"):
+            return True
+        if ch == "#" and (i == 0 or prefix[i - 1] in " \t("):
+            return True
+        i += 1
+    return False
+
+
+def _match_in_comment(text: str, start: int) -> bool:
+    if start < 0 or not text:
+        return False
+    last_open = text.rfind("/*", 0, start)
+    if last_open >= 0 and text.rfind("*/", 0, start) < last_open:
+        return True
+    line_start = text.rfind("\n", 0, start) + 1
+    return _line_comment_open(text[line_start:start])
+
+
 def _pattern_hits(sample_texts: dict, pattern, rule_id: str, title_fallback: str) -> list[dict]:
     findings = []
     for path, text in (sample_texts or {}).items():
         low = "/" + path.replace("\\", "/").lower()
         if "/node_modules/" in low:
             continue
-        matches = list(pattern.finditer(text or ""))
+        body = text or ""
+        matches = [
+            m for m in pattern.finditer(body)
+            if not _match_in_comment(body, m.start())
+        ]
         if not matches:
             continue
         evidence = "; ".join(
-            f"line {_line_of(text, m.start())}: {m.group(0)[:80]}"
+            f"line {_line_of(body, m.start())}: {m.group(0)[:80]}"
             for m in matches[:4]
         )
         item = _rule_finding(
@@ -478,42 +527,318 @@ def _source_lines(text: str) -> list[int]:
     return [_line_of(text, m.start()) for m in _SOURCE_RE.finditer(text or "")]
 
 
-def _sink_tainted(text: str, start: int, snippet: str, source_lines: list[int], idents: set[str]) -> bool:
+_ALIAS_RE = re.compile(
+    r"""(?mx)
+    ^[ \t]*
+    (\$[A-Za-z_]\w*|[A-Za-z_]\w*)
+    \s*=\s*
+    (\$[A-Za-z_]\w*|[A-Za-z_]\w*)
+    \s*;?[ \t]*$
+    """
+)
+_FUNC_DEF_RE = re.compile(
+    r"""(?imx)
+    ^[ \t]*
+    (?:
+        (?:export\s+)?(?:async\s+)?function\s+([A-Za-z_]\w*)\s*\(([^)]*)\)
+        |
+        (?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(([^)]*)\)
+        |
+        (?:public|private|protected)\s+(?:static\s+)?(?:final\s+)?[\w.<>,\[\]?]+\s+([A-Za-z_]\w*)\s*\(([^)]*)\)
+    )
+    """
+)
+_CALL_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]{3,})\s*\(([^)]{0,240})\)")
+_PY_SOURCE_ATTRS = {
+    "args", "form", "values", "json", "data", "query_params",
+    "GET", "POST", "files", "cookies", "query", "body", "params",
+}
+
+
+def _propagate(idents: set[str], text: str) -> set[str]:
+    found = set(idents)
+    for _ in range(12):
+        changed = False
+        for match in _ALIAS_RE.finditer(text or ""):
+            dst, src = match.group(1), match.group(2)
+            if src in found and dst not in found:
+                found.add(dst)
+                changed = True
+        if not changed:
+            break
+    return found
+
+
+def _func_name_params(match: re.Match) -> tuple[str, str]:
+    groups = match.groups()
+    for index in range(0, len(groups), 2):
+        if groups[index]:
+            return groups[index], groups[index + 1] or ""
+    return "", ""
+
+
+def _param_names(raw: str) -> list[str]:
+    names = []
+    for part in (raw or "").split(","):
+        token = part.strip().split("=")[0].strip()
+        token = token.split(":")[0].strip().replace("$", "")
+        bits = token.split()
+        token = bits[-1] if bits else ""
+        token = token.strip("*&")
+        if token and re.match(r"^[A-Za-z_]\w*$", token) and token not in {"self", "cls"}:
+            names.append(token)
+    return names
+
+
+def _func_body(text: str, start: int) -> str:
+    nxt = _FUNC_DEF_RE.search(text, start)
+    end = nxt.start() if nxt else min(len(text), start + 8000)
+    return text[start:end]
+
+
+def _py_is_source(node, known: set[str]) -> bool:
+    if node is None:
+        return False
+    if isinstance(node, ast.Name):
+        return node.id in known
+    if isinstance(node, ast.Attribute):
+        if node.attr in _PY_SOURCE_ATTRS:
+            base = node.value
+            if isinstance(base, ast.Name) and base.id in {"request", "req"}:
+                return True
+            return _py_is_source(base, known)
+        if node.attr in {"get", "getlist", "getParameter"}:
+            return _py_is_source(node.value, known)
+        return _py_is_source(node.value, known)
+    if isinstance(node, ast.Subscript):
+        return _py_is_source(node.value, known)
+    if isinstance(node, ast.Call):
+        if _py_is_source(node.func, known):
+            return True
+        if any(_py_is_source(arg, known) for arg in node.args):
+            return True
+        return any(_py_is_source(kw.value, known) for kw in node.keywords)
+    if isinstance(node, ast.BinOp):
+        return _py_is_source(node.left, known) or _py_is_source(node.right, known)
+    if isinstance(node, ast.JoinedStr):
+        return any(
+            isinstance(value, ast.FormattedValue) and _py_is_source(value.value, known)
+            for value in node.values
+        )
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return any(_py_is_source(elt, known) for elt in node.elts)
+    if isinstance(node, ast.Dict):
+        return any(_py_is_source(value, known) for value in node.values)
+    return False
+
+
+def _py_flow(text: str) -> tuple[set[str], set[str]]:
+    try:
+        tree = ast.parse(text or "")
+    except SyntaxError:
+        return set(), set()
+    idents: set[str] = set()
+    funcs: set[str] = set()
+
+    class Walker(ast.NodeVisitor):
+        def __init__(self):
+            self.local: set[str] = set()
+
+        def visit_FunctionDef(self, node):
+            saved = set(self.local)
+            self.local = set(self.local)
+            for stmt in node.body:
+                self.visit(stmt)
+            for stmt in node.body:
+                if isinstance(stmt, ast.Return) and _py_is_source(stmt.value, self.local):
+                    funcs.add(node.name)
+                    break
+            self.local = saved
+
+        visit_AsyncFunctionDef = visit_FunctionDef
+
+        def visit_Assign(self, node):
+            if _py_is_source(node.value, self.local):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        self.local.add(target.id)
+                        idents.add(target.id)
+            self.generic_visit(node)
+
+        def visit_AnnAssign(self, node):
+            if (
+                node.value is not None
+                and isinstance(node.target, ast.Name)
+                and _py_is_source(node.value, self.local)
+            ):
+                self.local.add(node.target.id)
+                idents.add(node.target.id)
+            self.generic_visit(node)
+
+    Walker().visit(tree)
+    return idents, funcs
+
+
+def _function_returns_source(body: str) -> bool:
+    idents = _propagate(_tainted_idents(body), body)
+    for match in re.finditer(r"\breturn\b([^\n;]*)", body or ""):
+        expr = match.group(1) or ""
+        if _match_in_comment(body, match.start()):
+            continue
+        if _SOURCE_RE.search(expr) or any(_ident_in(expr, ident) for ident in idents):
+            return True
+    return False
+
+
+def _params_reaching_sink(body: str, params: list[str]) -> list[tuple[str, str]]:
+    found: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for rule_id, pattern in _TAINT_SINKS:
+        for match in pattern.finditer(body or ""):
+            if _match_in_comment(body, match.start()):
+                continue
+            snippet = body[match.start(): min(len(body), match.end() + 160)]
+            for param in params:
+                if not (_ident_in(snippet, param) or _ident_in(snippet, "$" + param)):
+                    continue
+                key = (rule_id, param)
+                if key in seen:
+                    continue
+                seen.add(key)
+                found.append(key)
+    return found
+
+
+def _index_cross_file(sample_texts: dict, on_progress=None) -> tuple[set[str], dict[str, list[tuple[str, str, str]]]]:
+    tainted_funcs: set[str] = set()
+    sink_params: dict[str, list[tuple[str, str, str]]] = {}
+    items = list((sample_texts or {}).items())
+    total = len(items)
+    for index, (path, text) in enumerate(items, 1):
+        if on_progress and total and (index == 1 or index == total or index % 25 == 0):
+            try:
+                on_progress(index, total, path)
+            except Exception:
+                pass
+        body = text or ""
+        low = "/" + str(path).replace("\\", "/").lower()
+        if not body or "/node_modules/" in low or _is_example_context(path):
+            continue
+        if str(path).lower().endswith(".py"):
+            _py_idents, py_funcs = _py_flow(body)
+            tainted_funcs |= py_funcs
+        for match in _FUNC_DEF_RE.finditer(body):
+            if _match_in_comment(body, match.start()):
+                continue
+            name, raw_params = _func_name_params(match)
+            if len(name) < 4:
+                continue
+            params = _param_names(raw_params)
+            chunk = _func_body(body, match.end())
+            if _function_returns_source(chunk):
+                tainted_funcs.add(name)
+            for rule_id, param in _params_reaching_sink(chunk, params):
+                sink_params.setdefault(name, []).append((rule_id, str(path), param))
+    return tainted_funcs, sink_params
+
+
+def _sink_tainted(text: str, start: int, snippet: str, idents: set[str], tainted_funcs: set[str]) -> bool:
+    if _match_in_comment(text, start):
+        return False
     if _SOURCE_RE.search(snippet or ""):
         return True
     if any(_ident_in(snippet, ident) for ident in idents):
         return True
-    line = _line_of(text, start)
-    return any(abs(line - src) <= _NEAR_SOURCE_LINES for src in source_lines)
+    for name in tainted_funcs:
+        if re.search(r"\b" + re.escape(name) + r"\s*\(", snippet or ""):
+            return True
+    return False
 
 
-def check_taint_flows(sample_texts: dict) -> list[dict]:
-    """Intra-file source→sink taint. Not a compiler CFG; same-file only."""
+def check_taint_flows(sample_texts: dict, on_progress=None) -> list[dict]:
+    """Source-to-sink flow inside a file and across files via function returns and parameters.
+
+    Python files also use the stdlib AST. Other languages use assignment and
+    function structure, not a same-line keyword guess and not a nearby-line window.
+    """
+    items = list((sample_texts or {}).items())
+    total = max(len(items), 1)
+
+    def _half(done, tot, label, shift):
+        if not on_progress:
+            return
+        try:
+            on_progress(shift + int(done or 0), max(int(tot or 1), 1) * 2, label)
+        except Exception:
+            pass
+
+    tainted_funcs, sink_params = _index_cross_file(
+        sample_texts,
+        on_progress=(lambda done, tot, label: _half(done, tot, label, 0)) if on_progress else None,
+    )
     findings = []
-    for path, text in (sample_texts or {}).items():
+    for index, (path, text) in enumerate(items, 1):
+        if on_progress and (index == 1 or index == len(items) or index % 25 == 0):
+            try:
+                on_progress(total + index, total * 2, path)
+            except Exception:
+                pass
         low = "/" + str(path).replace("\\", "/").lower()
         if "/node_modules/" in low or _is_example_context(path):
             continue
         body = text or ""
         if not body:
             continue
-        sources = _source_lines(body)
-        idents = _tainted_idents(body)
-        if not sources and not idents:
-            continue
+        idents = _propagate(_tainted_idents(body), body)
+        if str(path).lower().endswith(".py"):
+            py_idents, _py_funcs = _py_flow(body)
+            idents |= py_idents
+        rule_hits: dict[str, list[str]] = {}
         for rule_id, pattern in _TAINT_SINKS:
-            hits = []
             for match in pattern.finditer(body):
-                left = max(0, match.start() - 80)
-                right = min(len(body), match.end() + 80)
-                snippet = body[left:right]
-                if not _sink_tainted(body, match.start(), snippet, sources, idents):
+                if _match_in_comment(body, match.start()):
                     continue
-                hits.append(
-                    f"line {_line_of(body, match.start())}: {match.group(0)[:80]}"
-                )
-                if len(hits) >= 4:
+                right = min(len(body), match.end() + 160)
+                snippet = body[match.start():right]
+                if not _sink_tainted(body, match.start(), snippet, idents, tainted_funcs):
+                    continue
+                bucket = rule_hits.setdefault(rule_id, [])
+                if len(bucket) >= 4:
                     break
+                bucket.append(f"line {_line_of(body, match.start())}: {match.group(0)[:80]}")
+        for call in _CALL_RE.finditer(body):
+            if _match_in_comment(body, call.start()):
+                continue
+            prefix = body[max(0, call.start() - 24):call.start()]
+            if re.search(r"(?:function|def|public|private|protected)\s*$", prefix):
+                continue
+            fname = call.group(1)
+            args = call.group(2) or ""
+            specs = sink_params.get(fname) or []
+            if not specs:
+                continue
+            arg_tainted = bool(
+                _SOURCE_RE.search(args)
+                or any(_ident_in(args, ident) for ident in idents)
+                or any(
+                    re.search(r"\b" + re.escape(fn) + r"\s*\(", args)
+                    for fn in tainted_funcs
+                )
+            )
+            if not arg_tainted:
+                continue
+            seen_rules: set[str] = set()
+            for rule_id, def_path, param in specs:
+                if rule_id in seen_rules:
+                    continue
+                seen_rules.add(rule_id)
+                bucket = rule_hits.setdefault(rule_id, [])
+                if len(bucket) >= 4:
+                    continue
+                bucket.append(
+                    f"line {_line_of(body, call.start())}: {fname}({param}) flows to {def_path}"
+                )
+        for rule_id, hits in rule_hits.items():
             if not hits:
                 continue
             item = _rule_finding(
@@ -569,29 +894,43 @@ def _dedupe_findings(findings: list[dict]) -> list[dict]:
     return out
 
 
-def run_static_checks(artefact: dict) -> list[dict]:
+def run_static_checks(artefact: dict, on_progress=None) -> list[dict]:
     data = artefact if isinstance(artefact, dict) else {}
     paths = data.get("paths") or []
     samples = data.get("sample_texts") or {}
+    steps = (
+        ("env files", lambda: check_env_files(paths)),
+        ("secrets", lambda: check_hardcoded_secrets(samples)),
+        ("debug flags", lambda: check_debug_flags(samples)),
+        ("weak crypto", lambda: _pattern_hits(samples, _WEAK_CRYPTO_PATTERN, "static-weak-crypto", "Weak cryptography")),
+        ("jwt", lambda: _pattern_hits(samples, _JWT_PATTERN, "static-jwt-hardcoded", "JWT / token handling issue")),
+        ("empty handlers", lambda: _pattern_hits(samples, _EMPTY_HANDLER_PATTERN, "static-empty-handler", "Empty error handler")),
+        ("debug residue", lambda: _pattern_hits(samples, _DEBUG_RESIDUE_PATTERN, "static-debug-residue", "Debug residue in source")),
+        ("data flow", None),
+        ("cors", lambda: _pattern_hits(samples, _CORS_STAR_PATTERN, "static-cors-star", "Permissive CORS origin in source")),
+        ("csrf", lambda: _pattern_hits(samples, _CSRF_DISABLED_PATTERN, "static-csrf-disabled", "CSRF protection disabled")),
+        ("sensitive files", lambda: check_sensitive_artifacts(paths)),
+    )
     findings: list[dict] = []
-    findings.extend(check_env_files(paths))
-    findings.extend(check_hardcoded_secrets(samples))
-    findings.extend(check_debug_flags(samples))
-    findings.extend(_pattern_hits(samples, _EVAL_PATTERN, "static-eval", "Dangerous dynamic code execution"))
-    findings.extend(_pattern_hits(samples, _HTML_SINK_PATTERN, "static-html-sink", "Unencoded HTML sink"))
-    findings.extend(_pattern_hits(samples, _SQL_CONCAT_PATTERN, "static-sql-concat", "SQL string concatenation"))
-    findings.extend(_pattern_hits(samples, _CMD_PATTERN, "static-command-exec", "OS command execution sink"))
-    findings.extend(_pattern_hits(samples, _WEAK_CRYPTO_PATTERN, "static-weak-crypto", "Weak cryptography"))
-    findings.extend(_pattern_hits(samples, _PATH_SINK_PATTERN, "static-path-sink", "User-controlled file path"))
-    findings.extend(_pattern_hits(samples, _JWT_PATTERN, "static-jwt-hardcoded", "JWT / token handling issue"))
-    findings.extend(_pattern_hits(samples, _EMPTY_HANDLER_PATTERN, "static-empty-handler", "Empty error handler"))
-    findings.extend(_pattern_hits(samples, _DEBUG_RESIDUE_PATTERN, "static-debug-residue", "Debug residue in source"))
-    findings.extend(_pattern_hits(samples, _TODO_SECRET_PATTERN, "static-todo-secret", "TODO near credential handling"))
-    findings.extend(check_taint_flows(samples))
-    findings.extend(_pattern_hits(samples, _DESER_API_PATTERN, "static-deser", "Insecure deserialization sink"))
-    findings.extend(_pattern_hits(samples, _CORS_STAR_PATTERN, "static-cors-star", "Permissive CORS origin in source"))
-    findings.extend(_pattern_hits(samples, _CSRF_DISABLED_PATTERN, "static-csrf-disabled", "CSRF protection disabled"))
-    findings.extend(check_sensitive_artifacts(paths))
+    total = len(steps)
+
+    def _report(done, label):
+        if not on_progress:
+            return
+        try:
+            on_progress(done, total, label)
+        except Exception:
+            pass
+
+    for index, (label, fn) in enumerate(steps, 1):
+        if label == "data flow":
+            def _flow_progress(done, flow_total, path, step=index):
+                frac = (float(done) / float(flow_total)) if flow_total else 1.0
+                _report((step - 1) + frac, path)
+            findings.extend(check_taint_flows(samples, on_progress=_flow_progress if on_progress else None))
+        else:
+            findings.extend(fn())
+        _report(index, label)
     return _dedupe_findings(findings)
 
 
@@ -613,7 +952,15 @@ def _error(code: str) -> dict:
     return {"error": code}
 
 
-def analyse_static(zip_path: str, *, open_fn=None) -> dict:
+def analyse_static(zip_path: str, *, open_fn=None, on_progress=None) -> dict:
+    def report(pct, label):
+        if not on_progress:
+            return
+        try:
+            on_progress(max(0, min(100, int(pct))), 100, str(label or ""))
+        except Exception:
+            pass
+
     if not str(zip_path or "").strip():
         return _error("invalid_zip")
     if open_fn is None:
@@ -621,8 +968,17 @@ def analyse_static(zip_path: str, *, open_fn=None) -> dict:
             from crawler.zip_reader import open_project_zip as open_fn
         except ImportError:
             return _error("crawler_unavailable")
+    report(4, zip_path)
+
+    def zip_progress(done, total, label):
+        frac = (float(done) / float(total)) if total else 1.0
+        report(6 + 52 * frac, label)
+
     try:
-        artefact = open_fn(zip_path)
+        try:
+            artefact = open_fn(zip_path, on_progress=zip_progress)
+        except TypeError:
+            artefact = open_fn(zip_path)
     except Exception:
         return _error("unreadable_zip")
     if not isinstance(artefact, dict):
@@ -630,7 +986,13 @@ def analyse_static(zip_path: str, *, open_fn=None) -> dict:
     if not artefact.get("ok"):
         code = str(artefact.get("error") or "").strip()
         return _error(code if code in KNOWN_ZIP_ERRORS else "unreadable_zip")
-    findings = run_static_checks(artefact)
+
+    def check_progress(done, total, label):
+        frac = (float(done) / float(total)) if total else 1.0
+        report(60 + 34 * frac, label)
+
+    findings = run_static_checks(artefact, on_progress=check_progress)
+    report(96, zip_path)
     return {
         "findings": sort_findings(findings),
         "tech_stacks": [],
@@ -638,5 +1000,5 @@ def analyse_static(zip_path: str, *, open_fn=None) -> dict:
     }
 
 
-def run_static_scan(zip_path: str) -> dict:
-    return analyse_static(zip_path)
+def run_static_scan(zip_path: str, on_progress=None) -> dict:
+    return analyse_static(zip_path, on_progress=on_progress)

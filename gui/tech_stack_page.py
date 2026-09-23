@@ -344,9 +344,7 @@ class TechStackPage(QWidget):
         )
         layout.addWidget(self.platform_title)
         self.platform_focus = QLabel(
-            "Focused review covers PHP runtime hardening and WordPress "
-            "(admin / XML-RPC / plugin surface) when those stacks are detected. "
-            "Other stacks still receive a baseline note."
+            "Platform notes follow the stacks detected for this case."
         )
         self.platform_focus.setWordWrap(True)
         self.platform_focus.setStyleSheet(
@@ -570,15 +568,24 @@ class TechStackPage(QWidget):
         if "wordpress" in names:
             focus.append("WordPress CMS")
         if hasattr(self, "platform_focus"):
+            detected = []
+            for t in tech_stacks:
+                n = str(t.get("name") or "").strip()
+                if n and n not in detected:
+                    detected.append(n)
             if focus:
                 self.platform_focus.setText(
                     "Focused evaluation in this case: "
                     + " and ".join(focus)
                     + ". Notes below include platform-specific remediation, not just a stack label."
                 )
+            elif detected:
+                self.platform_focus.setText(
+                    "Notes for this case follow the detected stacks: "
+                    + ", ".join(detected)
+                    + "."
+                )
             else:
                 self.platform_focus.setText(
-                    "Focused review covers PHP runtime hardening and WordPress "
-                    "(admin / XML-RPC / plugin surface) when those stacks are detected. "
-                    "Other stacks still receive a baseline note."
+                    "Platform notes follow the stacks detected for this case."
                 )

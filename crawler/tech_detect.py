@@ -76,24 +76,20 @@ def _origin(url: str) -> str:
 def _stack_names(found: list) -> set:
     return {str(item.get("name") or "").lower() for item in (found or [])}
 def _should_probe_wordpress(found: list, body_lc: str) -> bool:
-    names = _stack_names(found)
     blob = body_lc or ""
     return any(
-        token in names or token in blob
-        for token in (
-            "php", "wordpress", "wp-content", "wp-includes", "wp-json",
-            "laravel", "phpsessid",
+        path in blob or path.rstrip("/") in blob
+        for path in (
+            "/wp-login.php",
+            "/wp-includes/js/wp-embed.min.js",
+            "/xmlrpc.php",
+            "/wp-json/",
+            "/readme.html",
         )
     )
 def _should_probe_node(found: list, body_lc: str) -> bool:
-    names = _stack_names(found)
     blob = body_lc or ""
-    return any(
-        token in names or token in blob
-        for token in (
-            "node.js", "node", "express", "socket.io", "angular", "engine.io",
-        )
-    )
+    return "socket.io" in blob or "engine.io" in blob
 def _scan(headers_lc: dict, body_lc: str, host: str, neutral: bool, cookies_lc: str = "") -> list:
     found, seen = [], set()
     def add(name, cat, version, desc):
@@ -171,18 +167,9 @@ def _scan(headers_lc: dict, body_lc: str, host: str, neutral: bool, cookies_lc: 
     ):
         add("WordPress", "CMS", _version_of("WordPress", body_lc, header_blob),
             f"WordPress markers in the response body or links on {host}.")
-        add("PHP", "Language", _version_of("PHP", powered, header_blob, body_lc),
-            "Inferred from WordPress.")
     if "socket.io" in body_lc:
         add("Socket.IO", "Library", _version_of("Socket.IO", body_lc),
             f"Socket.IO client assets on {host}.")
-    if neutral and not found:
-        add(
-            "HTTP Service",
-            "Web Server",
-            "",
-            f"Reachable HTTP endpoint at {host}; specific stack markers not identified.",
-        )
     return found
 def _lc(page):
     headers = {
@@ -205,7 +192,10 @@ def _merge_pages(*pages: dict):
         bodies.append((page.get("body") or "").lower())
         cookies.append(_cookie_blob(page))
     return headers, "\n".join(bodies), url, " ".join(cookies)
-def _probe_node_stack(url: str, found: list) -> list:
+def _probe_node_stack(url: str, found: list, body_lc: str = "") -> list:
+    blob = body_lc or ""
+    if "socket.io" not in blob and "engine.io" not in blob:
+        return found
     names = {str(item.get("name") or "").lower() for item in found}
     origin = _origin(url)
     if not origin:
@@ -222,48 +212,43 @@ def _probe_node_stack(url: str, found: list) -> list:
                 "Socket.IO",
                 "Library",
                 _version_of("Socket.IO", body),
-                f"Socket.IO endpoint on {origin}.",
+                f"Socket.IO script at {origin}/socket.io/socket.io.js.",
             ))
-        if "express" not in names:
-            found.append(stack_item(
-                "Express",
-                "Backend",
-                _version_of("Express", headers.get("x-powered-by", ""), body),
-                "Commonly fronts Socket.IO on Node.",
-            ))
-        if "node.js" not in names:
-            found.append(stack_item(
-                "Node.js",
-                "Runtime",
-                _version_of("Node.js", headers.get("x-powered-by", ""), body),
-                "Inferred from Socket.IO / Express.",
-            ))
-        return found
+            names.add("socket.io")
     powered = headers.get("x-powered-by", "")
     if "express" in powered and "express" not in names:
         found.append(stack_item(
             "Express",
             "Backend",
             _version_of("Express", powered),
-            f"X-Powered-By on {origin}.",
+            f"X-Powered-By on {origin}/socket.io/socket.io.js.",
         ))
-        if "node.js" not in names:
-            found.append(stack_item("Node.js", "Runtime", "", "Inferred from Express."))
+        names.add("express")
+    if any(token in powered for token in ("node.js", "nodejs", "node/")) and "node.js" not in names:
+        found.append(stack_item(
+            "Node.js",
+            "Runtime",
+            _version_of("Node.js", powered),
+            f"X-Powered-By on {origin}/socket.io/socket.io.js.",
+        ))
     return found
-def _probe_php_wordpress(url: str, found: list) -> list:
-    """Cheap origin probes that confirm PHP / WordPress without targeting a lab."""
+def _probe_php_wordpress(url: str, found: list, body_lc: str = "") -> list:
+    """Confirm a WordPress path only when that path is already referenced."""
     names = {str(item.get("name") or "").lower() for item in found}
     origin = _origin(url)
     if not origin:
         return found
+    page_blob = body_lc or ""
     probes = (
-        ("/wp-login.php", "wordpress"),
-        ("/wp-includes/js/wp-embed.min.js", "wordpress"),
-        ("/xmlrpc.php", "wordpress"),
-        ("/wp-json/", "wordpress"),
-        ("/readme.html", "wordpress"),
+        "/wp-login.php",
+        "/wp-includes/js/wp-embed.min.js",
+        "/xmlrpc.php",
+        "/wp-json/",
+        "/readme.html",
     )
-    for path, kind in probes:
+    for path in probes:
+        if path not in page_blob and path.rstrip("/") not in page_blob:
+            continue
         extra = fetch_target(origin + path)
         if not extra.get("ok"):
             continue
@@ -283,18 +268,20 @@ def _probe_php_wordpress(url: str, found: list) -> list:
                 f"X-Powered-By on {origin}{path}.",
             ))
             names.add("php")
-        if kind == "wordpress" and status in (200, 401, 403, 405):
+        if status in (200, 401, 403, 405):
             hit = any(
                 tok in blob
                 for tok in (
                     "wordpress", "wp-login", "wp-includes", "xmlrpc",
-                    "wp-json", "wp-embed", "generator",
+                    "wp-json", "wp-embed",
                 )
             )
-            if path.endswith("xmlrpc.php") and status in (200, 405):
-                hit = hit or "xml" in blob or status == 405
             if path.endswith("readme.html") and "wordpress" not in blob:
                 hit = False
+            if path.endswith("xmlrpc.php"):
+                hit = hit and (
+                    "xml-rpc" in blob or "methodresponse" in blob or "faultcode" in blob
+                )
             if hit and "wordpress" not in names:
                 ver = _version_of("WordPress", body)
                 found.append(stack_item(
@@ -304,14 +291,6 @@ def _probe_php_wordpress(url: str, found: list) -> list:
                     f"WordPress surface at {origin}{path}.",
                 ))
                 names.add("wordpress")
-                if "php" not in names:
-                    found.append(stack_item(
-                        "PHP",
-                        "Language",
-                        _version_of("PHP", powered),
-                        "Inferred from WordPress surface.",
-                    ))
-                    names.add("php")
     return found
 def detect_tech_stack(url: str) -> list:
     url = normalise_url(url)
@@ -330,16 +309,16 @@ def detect_tech_stack(url: str) -> list:
             headers, body_lc, host, cookies = _merge_pages(page, browser_page)
             found = _scan(headers, body_lc, host or url, True, cookies)
             if _should_probe_wordpress(found, body_lc):
-                found = _probe_php_wordpress(url, found)
+                found = _probe_php_wordpress(url, found, body_lc)
             if _should_probe_node(found, body_lc):
-                found = _probe_node_stack(url, found)
+                found = _probe_node_stack(url, found, body_lc)
             return found
     headers, body_lc, cookies = _lc(page)
     found = _scan(headers, body_lc, url, bool(page.get("ok")), cookies)
     if _should_probe_wordpress(found, body_lc):
-        found = _probe_php_wordpress(url, found)
+        found = _probe_php_wordpress(url, found, body_lc)
     if _should_probe_node(found, body_lc):
-        found = _probe_node_stack(url, found)
+        found = _probe_node_stack(url, found, body_lc)
     return found
 def detect_tech_from_page(page: dict) -> list:
     headers, body, cookies = _lc(page)

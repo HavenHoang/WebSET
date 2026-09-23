@@ -128,14 +128,11 @@ NOTES: dict[str, dict] = {
         "severity": "Low",
         "match": ("apache", "httpd"),
         "description": (
-            "Apache HTTP Server was detected serving {location}. Default "
-            "configurations expose version and module details and may allow "
-            "directory listing."
+            "Apache HTTP Server was detected serving {location}."
         ),
         "remediation": (
-            "Set ServerTokens Prod and ServerSignature Off, disable the "
-            "Indexes option unless directory listing is intended, and disable "
-            "modules the application does not use."
+            "If the Server header includes a version, set ServerTokens Prod "
+            "and ServerSignature Off."
         ),
     },
     "iis": {
@@ -311,6 +308,159 @@ def build_platform_note(
         "plugin_id": plugin_id,
         "evidence": evidence,
     }
+def _evidence_gated_name(name: str) -> bool:
+    low = (name or "").lower()
+    if "wordpress" in low or "wp-content" in low or "wp-engine" in low:
+        return True
+    if low == "php" or low.startswith("php ") or "php-fpm" in low:
+        return True
+    return False
+
+
+def _origin_of(url: str) -> str:
+    from urllib.parse import urlparse
+    raw = (url or "").strip()
+    if not raw.startswith(("http://", "https://")):
+        return ""
+    parsed = urlparse(raw)
+    if not parsed.netloc:
+        return ""
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _http_get(url: str) -> dict:
+    if not str(url or "").startswith(("http://", "https://")):
+        return {}
+    try:
+        import requests
+        resp = requests.get(
+            url,
+            timeout=8,
+            allow_redirects=True,
+            headers={"User-Agent": "WebSET-StackEval"},
+        )
+        headers = {str(k).lower(): str(v) for k, v in resp.headers.items()}
+        text = resp.text or ""
+        if len(text) > 200000:
+            text = text[:200000]
+        return {
+            "ok": True,
+            "status": int(resp.status_code or 0),
+            "body": text,
+            "headers": headers,
+            "final_url": str(resp.url or url),
+        }
+    except Exception:
+        return {}
+
+
+def _zip_members(path: str, basenames: set[str]) -> dict[str, str]:
+    import os
+    import zipfile
+    wanted = {item.lower() for item in basenames}
+    out: dict[str, str] = {}
+    if not path or not os.path.isfile(path):
+        return out
+    try:
+        if not zipfile.is_zipfile(path):
+            return out
+        with zipfile.ZipFile(path, "r") as zf:
+            for name in zf.namelist():
+                if name.endswith("/"):
+                    continue
+                base = name.replace("\\", "/").rsplit("/", 1)[-1].lower()
+                if base not in wanted or base in out:
+                    continue
+                try:
+                    out[base] = zf.read(name).decode("utf-8", "replace")[:200000]
+                except Exception:
+                    continue
+    except zipfile.BadZipFile:
+        return {}
+    return out
+
+
+_PHP_INI_KEYS = (
+    "expose_php",
+    "display_errors",
+    "allow_url_include",
+    "allow_url_fopen",
+    "disable_functions",
+)
+
+
+def _parse_php_ini(text: str) -> dict[str, str]:
+    found: dict[str, str] = {}
+    for line in (text or "").splitlines():
+        raw = line.split(";", 1)[0].strip()
+        if not raw or raw.startswith("[") or "=" not in raw:
+            continue
+        key, value = raw.split("=", 1)
+        key = key.strip().lower()
+        if key in _PHP_INI_KEYS:
+            found[key] = value.strip()
+    return found
+
+
+def _looks_like_ini(text: str, parsed: dict[str, str]) -> bool:
+    if parsed:
+        return True
+    sample = (text or "")[:4000].lower()
+    if "<html" in sample and "[php]" not in sample:
+        return False
+    return "[php]" in sample
+
+
+def _php_error_displayed(text: str) -> str:
+    import re
+    match = re.search(
+        r"(?i)\b(?:warning|notice|fatal error|parse error|deprecated)\b:.{0,180}\bon line \d+",
+        text or "",
+    )
+    if not match:
+        return ""
+    return " ".join(match.group(0).split())[:180]
+
+
+def _looks_phpinfo(text: str) -> bool:
+    low = (text or "").lower()
+    return "php version" in low and ("phpinfo()" in low or "loaded configuration file" in low)
+
+
+def _looks_wp_login(page: dict) -> bool:
+    if int(page.get("status") or 0) != 200:
+        return False
+    low = (page.get("body") or "").lower()
+    return (
+        ("user_login" in low or "wp-submit" in low or 'name="log"' in low)
+        and ("wordpress" in low or "wp-login" in low or "loginform" in low)
+    )
+
+
+def _looks_xmlrpc(page: dict) -> bool:
+    status = int(page.get("status") or 0)
+    if status not in (200, 405):
+        return False
+    low = (page.get("body") or "").lower()
+    return (
+        "xml-rpc server accepts post" in low
+        or "<methodresponse" in low
+        or "faultcode" in low
+        or ("xmlrpc" in low and "method" in low)
+    )
+
+
+def _author_exposed(page: dict) -> bool:
+    status = int(page.get("status") or 0)
+    final = str(page.get("final_url") or "").lower()
+    low = (page.get("body") or "").lower()
+    if "/author/" in final and status in (200, 301, 302):
+        return True
+    if status == 200 and "posts by" in low and "wordpress" in low:
+        return True
+    return False
+
+
 def note_for_stack(stack: dict, location: str) -> dict | None:
     name = stack.get("name", "")
     version = stack.get("version", "")
@@ -318,10 +468,22 @@ def note_for_stack(stack: dict, location: str) -> dict | None:
     if not matched:
         return None
     key, note = matched
+    if key in ("wordpress", "php"):
+        return None
+    if key == "apache" and str(version or "").strip():
+        description = (
+            f"Apache HTTP Server {version} was detected serving {location} "
+            "from the response fingerprint."
+        )
+        remediation = (
+            "Set ServerTokens Prod and ServerSignature Off so that version "
+            "string is not returned."
+        )
+    else:
+        description = note["description"].format(location=location)
+        remediation = note["remediation"]
     label = f"{name} {version}".strip()
     severity = note["severity"]
-    description = note["description"].format(location=location)
-    remediation = note["remediation"]
     if _is_end_of_life(name, version):
         severity = "Medium" if severity == "Low" else "High"
         description += (
@@ -338,74 +500,209 @@ def note_for_stack(stack: dict, location: str) -> dict | None:
         plugin_id=f"platform-{key}",
         evidence=f"detected: {label}" if label else "",
     )
-def _extra_platform_notes(stack: dict, location: str) -> list[dict]:
-    """Deeper evaluation notes for the two platforms called out in scope (PHP, WordPress)."""
+def _wordpress_observed_notes(stack: dict, location: str) -> list[dict]:
     name = str(stack.get("name") or "")
     version = str(stack.get("version") or "")
+    notes: list[dict] = []
+    origin = _origin_of(location)
+    label = f"{name} {version}".strip()
+    if origin:
+        login = _http_get(origin + "/wp-login.php")
+        rpc = _http_get(origin + "/xmlrpc.php")
+        author = _http_get(origin + "/?author=1")
+    else:
+        members = _zip_members(location, {"wp-login.php", "xmlrpc.php"})
+        login_body = members.get("wp-login.php", "")
+        rpc_body = members.get("xmlrpc.php", "")
+        login = {"status": 200, "body": login_body, "final_url": location} if login_body else {}
+        rpc = {"status": 200, "body": rpc_body, "final_url": location} if rpc_body else {}
+        author = {}
+    if login and _looks_wp_login(login):
+        where = (origin + "/wp-login.php") if origin else "wp-login.php"
+        notes.append(build_platform_note(
+            severity="Low",
+            title="WordPress login surface",
+            location=location,
+            description=(
+                f"The WordPress login form was observed at {where} "
+                f"(HTTP {int(login.get('status') or 0)}). "
+                "No other WordPress hardening claim is made from the product name alone."
+            ),
+            remediation=(
+                "Restrict wp-login.php by source, rate-limit authentication, "
+                "and require 2FA for administrator accounts."
+            ),
+            plugin_id="platform-wordpress-login",
+            evidence=f"observed login form at {where}; detected: {label}".strip(),
+        ))
+    if rpc and _looks_xmlrpc(rpc):
+        where = (origin + "/xmlrpc.php") if origin else "xmlrpc.php"
+        snippet = " ".join((rpc.get("body") or "").split())[:140]
+        notes.append(build_platform_note(
+            severity="Medium",
+            title="WordPress XML-RPC endpoint",
+            location=location,
+            description=(
+                f"xmlrpc.php responded at {where} with HTTP {int(rpc.get('status') or 0)}. "
+                "The body identifies an XML-RPC handler."
+            ),
+            remediation=(
+                "Disable XML-RPC if remote publishing is not required, "
+                "or require authentication and reject system.multicall."
+            ),
+            plugin_id="platform-wordpress-xmlrpc",
+            evidence=f"response: {snippet}" if snippet else f"observed {where}",
+        ))
+    if author and _author_exposed(author):
+        where = author.get("final_url") or (origin + "/?author=1")
+        notes.append(build_platform_note(
+            severity="Low",
+            title="WordPress author enumeration",
+            location=location,
+            description=(
+                f"Requesting {origin}/?author=1 reached {where}, which exposes an author archive."
+            ),
+            remediation="Block unauthenticated author archives and REST user listing.",
+            plugin_id="platform-wordpress-author",
+            evidence=f"final url: {where}",
+        ))
+    return notes
+
+
+def _php_observed_notes(stack: dict, location: str) -> list[dict]:
+    name = str(stack.get("name") or "")
+    version = str(stack.get("version") or "")
+    notes: list[dict] = []
+    origin = _origin_of(location)
+    page = _http_get(location) if origin else {}
+    headers = page.get("headers") or {}
+    powered = str(headers.get("x-powered-by") or "")
+    if "php" in powered.lower():
+        notes.append(build_platform_note(
+            severity="Low",
+            title="PHP version banner",
+            location=location,
+            description=(
+                f"The response from {location} includes X-Powered-By: {powered}. "
+                "That header shows expose_php is enabled for this response. "
+                "display_errors and allow_url_include are not assumed from it."
+            ),
+            remediation="Set expose_php=Off and remove the X-Powered-By header.",
+            plugin_id="platform-php-banner",
+            evidence=f"X-Powered-By: {powered}",
+        ))
+    shown = _php_error_displayed(page.get("body") or "")
+    if shown:
+        notes.append(build_platform_note(
+            severity="Low",
+            title="PHP display_errors output",
+            location=location,
+            description=(
+                f"The response body from {location} contains a PHP diagnostic: {shown}. "
+                "Errors are being written into the HTTP response for this request."
+            ),
+            remediation="Set display_errors=Off and log_errors=On on the server.",
+            plugin_id="platform-php-display-errors",
+            evidence=shown,
+        ))
+    ini_text = ""
+    ini_where = ""
+    info_text = ""
+    info_where = ""
+    if origin:
+        ini_page = _http_get(origin + "/php.ini")
+        ini_body = ini_page.get("body") or ""
+        ini_parsed = _parse_php_ini(ini_body)
+        if int(ini_page.get("status") or 0) == 200 and _looks_like_ini(ini_body, ini_parsed):
+            ini_text = ini_body
+            ini_where = origin + "/php.ini"
+        info_page = _http_get(origin + "/phpinfo.php")
+        if int(info_page.get("status") or 0) == 200 and _looks_phpinfo(info_page.get("body") or ""):
+            info_text = info_page.get("body") or ""
+            info_where = origin + "/phpinfo.php"
+    else:
+        members = _zip_members(location, {"php.ini", "phpinfo.php"})
+        if members.get("php.ini"):
+            ini_text = members["php.ini"]
+            ini_where = "php.ini"
+        if members.get("phpinfo.php") and _looks_phpinfo(members["phpinfo.php"]):
+            info_text = members["phpinfo.php"]
+            info_where = "phpinfo.php"
+    parsed = _parse_php_ini(ini_text) if ini_text else {}
+    if ini_text and _looks_like_ini(ini_text, parsed):
+        if parsed:
+            shown_dirs = ", ".join(f"{k}={v}" for k, v in parsed.items())
+            risky = any(
+                str(parsed.get(key) or "").lower() in {"on", "1", "true", "yes"}
+                for key in ("display_errors", "allow_url_include", "expose_php", "allow_url_fopen")
+            )
+            notes.append(build_platform_note(
+                severity="Medium" if risky else "Low",
+                title="PHP configuration values",
+                location=location,
+                description=(
+                    f"php.ini was read from {ini_where}. Observed directives: {shown_dirs}. "
+                    "Directives that were not present in that file are not reported."
+                ),
+                remediation=(
+                    "Turn off expose_php, display_errors and allow_url_include where this file sets them on. "
+                    "Keep disable_functions aligned with what the application actually runs."
+                ),
+                plugin_id="platform-php-ini",
+                evidence=shown_dirs,
+            ))
+        else:
+            notes.append(build_platform_note(
+                severity="Low",
+                title="PHP configuration file exposed",
+                location=location,
+                description=(
+                    f"A php.ini file was retrieved from {ini_where}. The readable portion did not set "
+                    "expose_php, display_errors, allow_url_include, allow_url_fopen or disable_functions, "
+                    "so those values are not claimed."
+                ),
+                remediation="Keep php.ini outside the web root.",
+                plugin_id="platform-php-ini",
+                evidence=f"readable php.ini at {ini_where}",
+            ))
+    if info_text:
+        notes.append(build_platform_note(
+            severity="Medium",
+            title="phpinfo page exposed",
+            location=location,
+            description=(
+                f"A phpinfo page was observed at {info_where}. "
+                "It discloses the runtime configuration rendered in that response."
+            ),
+            remediation="Remove phpinfo scripts from the web root.",
+            plugin_id="platform-php-phpinfo",
+            evidence=f"phpinfo markers at {info_where}",
+        ))
+    if version and _is_end_of_life(name, version):
+        notes.append(build_platform_note(
+            severity="Medium",
+            title="Unsupported PHP release",
+            location=location,
+            description=(
+                f"The detected PHP version is {version}, which is on a release line that "
+                "no longer receives security updates. No php.ini setting was inferred from the version number."
+            ),
+            remediation="Upgrade to a supported PHP release.",
+            plugin_id="platform-php-eol",
+            evidence=f"detected version: {version}",
+        ))
+    return notes
+
+
+def _extra_platform_notes(stack: dict, location: str) -> list[dict]:
+    """WordPress and PHP notes are emitted only from a response or file that was actually read."""
+    name = str(stack.get("name") or "")
     low = name.lower()
-    extras: list[dict] = []
     if "wordpress" in low or "wp-content" in low or "wp-engine" in low:
-        extras.append(
-            build_platform_note(
-                severity="Medium",
-                title="WordPress XML-RPC and author surface",
-                location=location,
-                description=(
-                    f"WordPress on {location} typically exposes xmlrpc.php (pingback / "
-                    "multicall brute-force) and /?author=N user enumeration. These are "
-                    "platform defaults, not application features, and should be treated "
-                    "as attack surface even when no plugin is vulnerable."
-                ),
-                remediation=(
-                    "Disable XML-RPC if the site does not need remote publishing "
-                    "(remove xmlrpc.php or return 403). Block author archives and "
-                    "REST user listing for anonymous clients. Rate-limit wp-login.php."
-                ),
-                plugin_id="platform-wordpress-xmlrpc",
-                evidence=f"detected: {name} {version}".strip(),
-            )
-        )
-        extras.append(
-            build_platform_note(
-                severity="Low",
-                title="WordPress plugin and theme update discipline",
-                location=location,
-                description=(
-                    f"The WordPress install detected on {location} inherits every "
-                    "installed plugin and theme as part of its trusted computing base. "
-                    "Abandoned extensions are the most common path to known-CVE compromise "
-                    "on this platform."
-                ),
-                remediation=(
-                    "Inventory plugins and themes, remove anything unused, subscribe to "
-                    "update notices, and prefer extensions with a current security process. "
-                    "Do not copy plugin ZIP files into the web root as downloadable backups."
-                ),
-                plugin_id="platform-wordpress-plugins",
-                evidence=f"detected: {name} {version}".strip(),
-            )
-        )
+        return _wordpress_observed_notes(stack, location)
     if low == "php" or low.startswith("php ") or "php-fpm" in low:
-        extras.append(
-            build_platform_note(
-                severity="Low",
-                title="PHP information leak and dangerous functions",
-                location=location,
-                description=(
-                    f"PHP on {location} commonly advertises its version via X-Powered-By "
-                    "or phpinfo() leftovers, and default builds leave exec-family functions "
-                    "enabled. Combined with an upload or include flaw this becomes code execution."
-                ),
-                remediation=(
-                    "Remove phpinfo scripts from the web root, hide the runtime banner, "
-                    "and disable exec, passthru, shell_exec, system, proc_open and "
-                    "allow_url_include unless a documented feature needs them."
-                ),
-                plugin_id="platform-php-functions",
-                evidence=f"detected: {name} {version}".strip(),
-            )
-        )
-    return extras
+        return _php_observed_notes(stack, location)
+    return []
 
 
 def notes_for_stacks(target: str, stacks) -> list[dict]:
@@ -416,17 +713,21 @@ def notes_for_stacks(target: str, stacks) -> list[dict]:
     seen: set[str] = set()
     for stack in normalise_stacks(stacks):
         note = note_for_stack(stack, location)
-        if not note or note["plugin_id"] in seen:
-            continue
-        seen.add(note["plugin_id"])
-        notes.append(note)
+        if note and note["plugin_id"] not in seen:
+            seen.add(note["plugin_id"])
+            notes.append(note)
         for extra in _extra_platform_notes(stack, location):
             if extra["plugin_id"] in seen:
                 continue
             seen.add(extra["plugin_id"])
             notes.append(extra)
     if not notes:
-        names = [s.get("name", "Unknown") for s in normalise_stacks(stacks)]
+        named = normalise_stacks(stacks)
+        if not named:
+            return []
+        if all(_evidence_gated_name(s.get("name", "")) for s in named):
+            return []
+        names = [s.get("name", "Unknown") for s in named]
         label = names[0] if names else "the detected service"
         notes.append(
             build_platform_note(

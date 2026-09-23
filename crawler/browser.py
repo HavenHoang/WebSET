@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from urllib.parse import urljoin, urlparse
 from crawler.scope import normalise_url
-_LAB_LOGINS = (
+_COMMON_LOGINS = (
     ("admin", "password"),
     ("admin", "admin"),
     ("bee", "bug"),
@@ -110,7 +110,7 @@ def _hrefs_into_body(body: str, hrefs: list[str]) -> str:
         lines.append(f'<a href="{safe}"></a>')
     lines.append("-->")
     return (body or "") + "\n" + "\n".join(lines)
-def _try_lab_login(driver) -> None:
+def _try_default_login(driver) -> None:
     html = ""
     try:
         html = driver.page_source or ""
@@ -140,7 +140,7 @@ def _try_lab_login(driver) -> None:
             continue
     if user_el is None or pass_el is None:
         return
-    for user, password in _LAB_LOGINS:
+    for user, password in _COMMON_LOGINS:
         try:
             user_el.clear()
             user_el.send_keys(user)
@@ -252,7 +252,7 @@ def fetch_with_selenium(
         else:
             time.sleep(0.25)
         if not skip_login:
-            _try_lab_login(driver)
+            _try_default_login(driver)
         if not wait_text:
             try:
                 inner = driver.execute_script(

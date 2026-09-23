@@ -16,7 +16,7 @@ DEFAULT_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
     "Connection": "close",
 }
-_LAB_LOGINS = (
+_COMMON_LOGINS = (
     ("admin", "password"),
     ("admin", ""),
     ("admin", "admin"),
@@ -421,7 +421,7 @@ def _try_form_login(sess, page_url: str, body: str, timeout: float):
     post_to = _form_action(body, page_url) or page_url
     if post_to and post_to not in candidates:
         candidates.insert(0, post_to)
-    for user, password in _LAB_LOGINS:
+    for user, password in _COMMON_LOGINS:
         for target in candidates:
             try:
                 fresh = sess.get(target, timeout=timeout, allow_redirects=True)

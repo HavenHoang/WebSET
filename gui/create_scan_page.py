@@ -113,6 +113,26 @@ class _DynamicScanWorker(QObject):
         self.progress.emit(int(done or 0), int(total or 0), str(label or ""))
 
 
+class _StaticScanWorker(QObject):
+    progress = pyqtSignal(int, int, str)
+    done = pyqtSignal(object)
+
+    def __init__(self, zip_path: str):
+        super().__init__()
+        self._zip_path = zip_path
+
+    def run(self):
+        try:
+            from core.scan_manager import run_static_scan
+            result = run_static_scan(self._zip_path, on_progress=self._on_progress)
+        except Exception as exc:
+            result = {"error": f"Error calling backend: {exc}"}
+        self.done.emit(result)
+
+    def _on_progress(self, done, total, label):
+        self.progress.emit(int(done or 0), int(total or 0), str(label or ""))
+
+
 class CreateScanPage(QWidget):
     scan_finished = pyqtSignal()
 
@@ -818,36 +838,76 @@ class CreateScanPage(QWidget):
         self._pending_case_name = case_name
         self.static_scan_button.setEnabled(False)
         self.static_stack_button.setEnabled(False)
+        self._scan_failed = False
+        self._findings = []
+        self._current_scan_url = self._zip_path
+        self._scan_gen += 1
+        gen = self._scan_gen
         self.progress.setValue(0)
-        self.update_status(f"Static scan queued for: {self._zip_path}")
-        try:
-            from core.scan_manager import run_static_scan
-            result = run_static_scan(self._zip_path)
-            if isinstance(result, dict) and result.get("error"):
-                msg = self._format_scan_error(result.get("error"))
-                self.update_status(msg)
-                self._toast(msg)
-                self.static_scan_button.setEnabled(True)
-                self.static_stack_button.setEnabled(True)
-                self.progress.setValue(0)
-                return
-            if isinstance(result, dict) and "findings" in result:
-                self._findings = _start_scan_only(_enrich(result.get("findings") or []))
-            elif isinstance(result, list):
-                self._findings = _start_scan_only(_enrich(result))
-            else:
-                self.update_status("Unexpected response from static backend")
-                self.static_scan_button.setEnabled(True)
-                self.static_stack_button.setEnabled(True)
-                self.progress.setValue(0)
-                return
-            self._current_scan_url = self._zip_path
-            self._save_and_finish_static()
-        except Exception as e:
-            self.update_status(f"Static scan error: {e}")
+        self._progress_value = 6
+        self.progress.setValue(6)
+        self.update_status(f"Static scan  {_short_scan_path(self._zip_path)}")
+        self._start_static_worker(self._zip_path, gen)
+
+    def _start_static_worker(self, zip_path: str, gen: int):
+        thread = QThread(self)
+        worker = _StaticScanWorker(zip_path)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(
+            lambda done, total, label, g=gen: self._on_static_progress(g, done, total, label)
+        )
+        worker.done.connect(
+            lambda result, g=gen: self._on_static_worker_done(g, result)
+        )
+        worker.done.connect(thread.quit)
+        worker.done.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self._static_thread = thread
+        self._static_worker = worker
+        thread.start()
+
+    def _on_static_progress(self, gen: int, done: int, total: int, label: str):
+        if gen != self._scan_gen or self._scan_failed:
+            return
+        shown = _short_scan_path(label)
+        if total > 0:
+            page_pct = min(92, max(6, int(done * 92 / max(total, 1))))
+            self._progress_value = max(self._progress_value, page_pct)
+            self.update_status(f"Static scan {done}/{total}  {shown}")
+        else:
+            self._progress_value = min(90, self._progress_value + 1)
+            self.update_status(f"Static scan  {shown}")
+        self.progress.setValue(self._progress_value)
+
+    def _on_static_worker_done(self, gen: int, result):
+        self._static_worker = None
+        if gen != self._scan_gen:
+            self.static_scan_button.setEnabled(True)
+            self.static_stack_button.setEnabled(True)
+            return
+        if isinstance(result, dict) and result.get("error"):
+            msg = self._format_scan_error(result.get("error"))
+            self.update_status(msg)
+            self._toast(msg)
             self.static_scan_button.setEnabled(True)
             self.static_stack_button.setEnabled(True)
             self.progress.setValue(0)
+            return
+        if isinstance(result, dict) and "findings" in result:
+            self._findings = _start_scan_only(_enrich(result.get("findings") or []))
+        elif isinstance(result, list):
+            self._findings = _start_scan_only(_enrich(result))
+        else:
+            self.update_status("Unexpected response from static backend")
+            self.static_scan_button.setEnabled(True)
+            self.static_stack_button.setEnabled(True)
+            self.progress.setValue(0)
+            return
+        self._current_scan_url = self._zip_path
+        self.progress.setValue(96)
+        self.update_status("Saving static scan results...")
+        self._save_and_finish_static()
 
     def _save_and_finish_static(self):
         session_n = 0
