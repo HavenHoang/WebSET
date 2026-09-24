@@ -158,10 +158,6 @@ _AUTH_SECRET_RE = re.compile(
     r"^(pass(word|wd)?|passwd|pwd|passcode)$",
     re.I,
 )
-_PASSWORD_NAME_RE = re.compile(
-    r"(^|[^a-z])(pass(word|wd)?|pwd|passwd)([^a-z]|$)",
-    re.I,
-)
 _AUTH_JSON_KEYS = (
     "token",
     "authentication",
@@ -513,25 +509,7 @@ def _merge_probe_fields(base: dict, param: dict, probe: str) -> dict:
     if str(param.get("source") or "") == "form" or companions:
         if not any(_SUBMIT_KEY_RE.search(str(k)) for k in out):
             out.setdefault("Submit", "Submit")
-    _keep_password_fields_apart(out, name)
     return out
-
-
-def _keep_password_fields_apart(fields: dict, probed_name: str) -> None:
-    """A confirm-password form commits when every password field is equal.
-
-    Probes must not send that shape. The probed field stays intact so the
-    check still sees its payload. One other password field is made different.
-    """
-    names = [key for key in fields if _PASSWORD_NAME_RE.search(key or "")]
-    if len(names) < 2:
-        return
-    if len({str(fields.get(key) or "") for key in names}) > 1:
-        return
-    for key in names:
-        if key != probed_name:
-            fields[key] = str(fields.get(key) or "") + "x"
-            return
 def _param_priority(param: dict) -> int:
     name = str(param.get("name") or "")
     path = urlparse(str(param.get("url") or "")).path.lower()
