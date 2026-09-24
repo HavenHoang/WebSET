@@ -18,8 +18,8 @@ _ERROR_CODES = {
 }
 _UNUSABLE_STATUSES = frozenset({0, 502, 503, 504})
 _MAX_EXTRA_TARGETS = 24
-_SCAN_BUDGET_SEC = 25.0
-_SLOW_FETCH_SEC = 4.0
+_SCAN_BUDGET_SEC = 40.0
+_SLOW_FETCH_SEC = 12.0
 _FS_PREFIXES = (
     "/users/",
     "/home/",
