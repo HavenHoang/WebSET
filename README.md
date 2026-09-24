@@ -55,7 +55,79 @@ The first launch creates `webset.db` in this folder. That file is local history.
 
 On the login screen, choose a username and a password of at least 4 characters, click **Register**, then **Login**. There is no default account.
 
-## 4. First scan
+## 4. Start the same DVWA and Juice Shop
+
+Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) and leave it running. Use these two labs, not an older DVWA image such as `vulnerables/web-dvwa`. A different image produces a different finding count.
+
+**DVWA** is the official image pinned to the build this project was checked against:
+
+`ghcr.io/digininja/dvwa@sha256:ed35515e9111801e6e386a6fbb11165508cc7f72e0cb8da4dbb3df70182986c6`
+
+Source and package pages: [github.com/digininja/DVWA](https://github.com/digininja/DVWA), [ghcr.io/digininja/dvwa](https://github.com/digininja/DVWA/pkgs/container/dvwa).
+
+In an empty folder, save this as `compose.yml`:
+
+```yaml
+volumes:
+  dvwa:
+
+networks:
+  dvwa:
+
+services:
+  dvwa:
+    image: ghcr.io/digininja/dvwa@sha256:ed35515e9111801e6e386a6fbb11165508cc7f72e0cb8da4dbb3df70182986c6
+    environment:
+      - DB_SERVER=db
+    depends_on:
+      - db
+    networks:
+      - dvwa
+    ports:
+      - 127.0.0.1:4280:80
+    restart: unless-stopped
+
+  db:
+    image: docker.io/library/mariadb:10
+    environment:
+      - MYSQL_ROOT_PASSWORD=dvwa
+      - MYSQL_DATABASE=dvwa
+      - MYSQL_USER=dvwa
+      - MYSQL_PASSWORD=p@ssw0rd
+    volumes:
+      - dvwa:/var/lib/mysql
+    networks:
+      - dvwa
+    restart: unless-stopped
+```
+
+From that folder:
+
+```bash
+docker compose up -d
+```
+
+Then open [http://127.0.0.1:4280/setup.php](http://127.0.0.1:4280/setup.php) and click **Create / Reset Database**. Log in at [http://127.0.0.1:4280/login.php](http://127.0.0.1:4280/login.php) with `admin` / `password`. Open **DVWA Security**, set it to **Low**, and submit. Scan `http://127.0.0.1:4280/`.
+
+**Juice Shop** is the current official image:
+
+```bash
+docker pull bkimminich/juice-shop
+docker run -d --name juice-shop -p 127.0.0.1:3000:3000 bkimminich/juice-shop
+```
+
+Open [http://127.0.0.1:3000/](http://127.0.0.1:3000/). Image page: [hub.docker.com/r/bkimminich/juice-shop](https://hub.docker.com/r/bkimminich/juice-shop). Scan `http://127.0.0.1:3000/`.
+
+Stop them with:
+
+```bash
+docker compose down
+docker stop juice-shop
+```
+
+`docker compose down` does not delete the DVWA database volume. Add `-v` only if you want a fresh database.
+
+## 5. First scan
 
 1. Open **Create Scan**.
 2. Enter an application / case name.
