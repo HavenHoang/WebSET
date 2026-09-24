@@ -136,6 +136,6 @@ python main.py
 
 **Windows `python` is not recognised:** create the venv with `py -3 -m venv .venv`.
 
-**Scan fails immediately:** the URL must start with `http://` or `https://` and must be open on this machine. `localhost` on another computer is not this machine.
+**Scan fails immediately:** the URL must start with `http://` or `https://` and must be able to open on this machine. `localhost` on another computer is not this machine.
 
 **PDF export says ReportLab is missing:** `python -m pip install "reportlab>=4.0.9"`.
