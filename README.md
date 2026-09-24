@@ -107,7 +107,7 @@ From that folder:
 docker compose up -d
 ```
 
-Then open [http://127.0.0.1:4280/setup.php](http://127.0.0.1:4280/setup.php) and click **Create / Reset Database**. Log in at [http://127.0.0.1:4280/login.php](http://127.0.0.1:4280/login.php) with `admin` / `password blank`. Open **DVWA Security**, set it to **Low**, and submit. Scan `http://127.0.0.1:4280/`.
+Then open [http://127.0.0.1:4280/setup.php](http://127.0.0.1:4280/setup.php) and click **Create / Reset Database**. Log in at [http://127.0.0.1:4280/login.php](http://127.0.0.1:4280/login.php) with `admin` / password leaves blank. Open **DVWA Security**, set it to **Low**, and submit. Scan `http://127.0.0.1:4280/`.
 
 **Juice Shop** is the current official image:
 
