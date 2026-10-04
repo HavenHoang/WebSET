@@ -96,8 +96,6 @@ def discover_same_host_links(body: str, page_url: str, limit: int = 80) -> list[
             continue
         if text.startswith("#"):
             _keep(_hash_to_http(text, page_url))
-        if len(out) >= limit:
-                return out
             continue
         _keep(urljoin(page_url, text.split("#")[0]))
         if len(out) >= limit:
