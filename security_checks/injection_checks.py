@@ -458,10 +458,6 @@ def _dedupe_params(params) -> list[dict]:
         out.append(p)
     return out
 def _attach_sibling_fields(params) -> list[dict]:
-    """Carry hidden / submit fields from the same form URL with every probe.
-    Many servers only execute the handler when the submit name is present
-    (HTML successful-control). GET probes that omit it never hit the sink.
-    """
     groups: dict[tuple, list[dict]] = {}
     for p in params or []:
         key = (
@@ -525,8 +521,6 @@ def _param_priority(param: dict) -> int:
         return 2
     return 4
 def _param_visible(param: dict, body: str, page_url: str = "") -> bool:
-    # Off-page harvested / generic search params MUST still be probed.
-    # Location is the param's own URL (sink), not the page that mentioned it.
     if str(param.get("source") or "") in ("form", "url", "search"):
         return True
     name = str(param.get("name") or "").strip().lower()
@@ -689,12 +683,6 @@ def _companion_names(param: dict) -> set[str]:
 
 
 def _is_auth_injection_param(param: dict) -> bool:
-    """Login/auth surface on whatever host is being scanned.
-
-    JSON identity/secret fields are auth by location. HTML forms are auth
-    only when an identity field and a password field appear together — a
-    lone ?user=1 is not a login form.
-    """
     name = str((param or {}).get("name") or "").strip()
     if not name:
         return False
@@ -1132,7 +1120,6 @@ def _script_fetch_rank(url: str) -> int:
 
 
 def _harvest_script_text(page_url: str, body: str, limit: int = 6, cookies=None) -> str:
-    """Download same-host scripts the page actually references. No path guessing."""
     origin = _origin(page_url)
     chunks = [body or ""]
     seen = set()
@@ -1240,7 +1227,6 @@ def _probe_json_sqli(url: str, field: str, cookies=None) -> list[dict]:
 
 
 def _probe_json_nosqli(url: str, field: str, cookies=None) -> list[dict]:
-    """Operator-object login probe. Baseline must fail; operator must authenticate."""
     baseline = json.dumps({field: "webset-nosql-baseline", "password": "webset"})
     base_resp = _send("POST", url, baseline, "application/json", cookies=cookies)
     if _json_auth_success(base_resp.get("status") or 0, base_resp.get("body") or ""):
@@ -1528,12 +1514,6 @@ def _probe_xml_xxe(page_url: str, cookies=None) -> list[dict]:
             break
     return findings
 def _dom_xss_from_script(page_url: str, script: str) -> list[dict]:
-    """
-    DOM XSS from the script that was actually downloaded.
-    A query parameter variable must be passed into an HTML sink
-    (innerHTML, document.write, insertAdjacentHTML, or a sanitizer bypass)
-    in the same function. No path list and no browser.
-    """
     origin = _origin(page_url)
     text = script or ""
     if not origin or not text:
@@ -1703,7 +1683,6 @@ def run_injection_checks(ctx: HttpContext, params=None, forms=None, artefact=Non
     collected = _dedupe_params(collected)
     _attach_sibling_fields(collected)
     collected.sort(key=_param_priority)
-    # Probe clock starts after JS harvest so discovery does not eat the inject budget.
     started = time.time()
     findings.extend(_safe("reflected", lambda: check_reflected_input(ctx, collected)))
     _q = urlparse(str(ctx.raw_url or ctx.url or "")).query.lower()
@@ -1766,7 +1745,6 @@ def run_injection_checks(ctx: HttpContext, params=None, forms=None, artefact=Non
 
 
 def run_origin_wide_checks(ctx: HttpContext, artefact=None) -> list[dict]:
-    """XXE / JSON auth / NoSQL surfaces — once per scan, after crawl."""
     started = time.time()
     if not ctx or not (getattr(ctx, "url", None) or getattr(ctx, "requested_url", None)):
         return []

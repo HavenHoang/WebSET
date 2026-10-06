@@ -1,10 +1,7 @@
-"""Normalise header and cookie artefacts for Member 1 passive checks."""
 from __future__ import annotations
 
 
 def headers_to_dict(raw_headers) -> dict:
-    """Accept requests.Response.headers (CaseInsensitiveDict), a plain dict,
-    or a list of (key, value) pairs, and return a plain str->str dict."""
     if raw_headers is None:
         return {}
     # Any mapping (dict, CaseInsensitiveDict, email.message) exposes .items()
@@ -23,7 +20,6 @@ def headers_to_dict(raw_headers) -> dict:
 
 
 def set_cookie_list(raw_headers) -> list:
-    """Collect all Set-Cookie values as strings."""
     if raw_headers is None:
         return []
     items = []

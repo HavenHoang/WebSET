@@ -1227,6 +1227,12 @@ class CasesPage(QWidget):
                     self, "Delete case", "Could not delete (not owner or missing)."
                 )
                 return
+            if (
+                getattr(SharedState, "case_id", None) is not None
+                and int(SharedState.case_id) == int(self._selected_case_id)
+            ):
+                SharedState.case_id = None
+                SharedState.scan_id = None
         except Exception as e:
             QMessageBox.warning(self, "Error", str(e))
             return
@@ -1249,7 +1255,7 @@ class CasesPage(QWidget):
             self,
             "Clear my history",
             "Clear only YOUR cases and scans from this account?\n"
-            "Global dashboard history will be kept.",
+            "They will also be removed from the dashboard.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply != QMessageBox.StandardButton.Yes:

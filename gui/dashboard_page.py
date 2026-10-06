@@ -13,28 +13,28 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 PLATFORM_ORIGIN = "Platform"
 OWASP_RULES = [
-    ("A01", "Broken Access Control", ["access", "idor", "traversal", "csrf", "redirect"]),
-    ("A02", "Cryptographic Failures", ["cookie", "secure flag", "crypto", "tls", "ssl", "hsts", "plaintext"]),
-    ("A03", "Injection", ["injection", "sqli", "sql", "xss", "nosql", "command", "xxe"]),
-    ("A04", "Insecure Design", ["insecure design", "client-side validation", "upload"]),
-    ("A05", "Security Misconfiguration", ["header", "csp", "misconfig", "server information", "x-frame", "cors", "listing"]),
-    ("A06", "Vulnerable and Outdated Components", ["outdated", "end of life", "cve", "supply chain"]),
-    ("A07", "Identification and Authentication Failures", ["authentication", "session", "credential", "password"]),
-    ("A08", "Software and Data Integrity Failures", ["integrity", "deserialization", "ci/cd"]),
-    ("A09", "Security Logging and Monitoring Failures", ["logging", "monitoring", "audit"]),
-    ("A10", "Server-Side Request Forgery", ["ssrf", "server-side request"]),
+    ("A01", "Broken Access Control", ["access", "idor", "traversal", "csrf", "redirect", "ssrf"]),
+    ("A02", "Security Misconfiguration", ["header", "csp", "misconfig", "server information", "x-frame", "cors", "listing"]),
+    ("A03", "Software Supply Chain Failures", ["outdated", "end of life", "cve", "supply chain"]),
+    ("A04", "Cryptographic Failures", ["cookie", "secure flag", "crypto", "tls", "ssl", "hsts", "plaintext"]),
+    ("A05", "Injection", ["injection", "sqli", "sql", "xss", "nosql", "command", "xxe"]),
+    ("A06", "Insecure Design", ["insecure design", "client-side validation", "upload"]),
+    ("A07", "Authentication Failures", ["authentication", "session", "credential", "password"]),
+    ("A08", "Software or Data Integrity Failures", ["integrity", "deserialization", "ci/cd"]),
+    ("A09", "Security Logging and Alerting Failures", ["logging", "monitoring", "audit"]),
+    ("A10", "Mishandling of Exceptional Conditions", ["exception", "error handling"]),
 ]
-_OWASP_2025_TO_2021 = {
+_OWASP_2021_TO_2025 = {
     "A01": "A01",
-    "A02": "A05",
-    "A03": "A06",
-    "A04": "A02",
-    "A05": "A03",
-    "A06": "A04",
+    "A02": "A04",
+    "A03": "A05",
+    "A04": "A06",
+    "A05": "A02",
+    "A06": "A03",
     "A07": "A07",
     "A08": "A08",
     "A09": "A09",
-    "A10": "A05",
+    "A10": "A01",
 }
 def _owasp_code(raw: str) -> str:
     text = str(raw or "").upper().replace("OWASP-", "").strip()
@@ -42,21 +42,38 @@ def _owasp_code(raw: str) -> str:
         if text.startswith(code) or f"{code}:" in text or f"{code} " in text:
             return code
     return ""
-def map_finding_to_owasp(name: str, description: str = "", owasp: str | None = None, owasp_2021: str | None = None) -> str:
-    code_2021 = _owasp_code(owasp_2021 or "")
-    if code_2021:
-        return code_2021
+def map_finding_to_owasp(
+    name: str,
+    description: str = "",
+    owasp: str | None = None,
+    owasp_2021: str | None = None,
+    owasp_2025: str | None = None,
+) -> str:
     raw = str(owasp or "").strip()
-    code = _owasp_code(raw)
-    if code:
-        if "2025" in raw:
-            return _OWASP_2025_TO_2021.get(code, code)
-        return code
+    if "2025" in raw:
+        code = _owasp_code(raw)
+        if code:
+            return code
+    raw_2025 = str(owasp_2025 or "").strip()
+    if "2025" in raw_2025:
+        code = _owasp_code(raw_2025)
+        if code:
+            return code
+    for old in (owasp_2021, raw):
+        text = str(old or "").strip()
+        if "2021" in text:
+            code = _owasp_code(text)
+            if code:
+                return _OWASP_2021_TO_2025.get(code, code)
+    for candidate in (raw_2025, raw, owasp_2021):
+        code = _owasp_code(str(candidate or ""))
+        if code:
+            return code
     text = f"{name} {description}".lower()
     for item_code, _, keys in OWASP_RULES:
         if any(k in text for k in keys):
             return item_code
-    return "A05"
+    return "A02"
 def _is_platform(f: dict) -> bool:
     return str((f or {}).get("scan_origin") or "") == PLATFORM_ORIGIN
 def _platform_note_counts(rows: list) -> list:
@@ -297,7 +314,7 @@ class DashboardPage(QWidget):
         )
         right_l = QVBoxLayout(right)
         right_l.setContentsMargins(12, 10, 12, 10)
-        t2 = QLabel("OWASP TOP 10 · Finding counts (Start Scan)")
+        t2 = QLabel("OWASP TOP 10:2025 · Finding counts (Start Scan)")
         t2.setStyleSheet("color: #1f2a44; font-weight: 800; font-size: 13px; background: transparent;")
         right_l.addWidget(t2)
         self.bar_chart = BarChartWidget()
@@ -317,7 +334,7 @@ class DashboardPage(QWidget):
         self.files_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         fl.addWidget(self.files_table)
         mid.addWidget(files_card, 3)
-        owasp_card = self._panel("OWASP mapping detail (Start Scan)")
+        owasp_card = self._panel("OWASP Top 10:2025 (Start Scan)")
         ol = owasp_card.layout()
         self.owasp_table = self._table(["Category", "Code", "Count"], min_height=280)
         self.owasp_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -573,6 +590,7 @@ class DashboardPage(QWidget):
                     str(f.get("description", "")),
                     owasp=f.get("owasp"),
                     owasp_2021=f.get("owasp_2021"),
+                    owasp_2025=f.get("owasp_2025"),
                 )
                 owasp_counts[code] = owasp_counts.get(code, 0) + 1
         self.bar_chart.set_rows(

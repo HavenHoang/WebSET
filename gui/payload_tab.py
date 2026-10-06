@@ -114,7 +114,6 @@ QComboBox#payloadCombo::drop-down {
 
 
 class _ChipFlow(QLayout):
-    """Wrap chips/badges so they do not overlap the next row."""
 
     def __init__(self, parent=None, h_spacing=8, v_spacing=6):
         super().__init__(parent)
@@ -595,7 +594,6 @@ def _with_bearer(request_text: str, token: str) -> str:
 
 
 def _extract_status_code(response_text: str) -> str:
-    """Best-effort HTTP status-code extraction from a raw response blob."""
     if not response_text:
         return "—"
     for line in response_text.splitlines():
@@ -619,7 +617,6 @@ def _extract_status_code(response_text: str) -> str:
 
 
 def _field_from_blob(text: str, names: tuple[str, ...]) -> str:
-    """Read a labelled field from injector / active_test output."""
     if not text:
         return ""
     lines = (text or "").splitlines()
@@ -654,8 +651,6 @@ def _field_from_blob(text: str, names: tuple[str, ...]) -> str:
                 )
             ):
                 break
-            # Do not abort evidence on a blank line or a leftover heading
-            # fragment — those used to hide the probe that sits on the next line.
             if key_l in evidence_keys and raw_nxt and _looks_page_heading(raw_nxt):
                 k += 1
                 continue
@@ -677,7 +672,6 @@ def _field_from_blob(text: str, names: tuple[str, ...]) -> str:
 
 
 def _backend_meaning(response_text: str) -> str:
-    """GUI display only — text is owned by payload_injection.injector / active_test."""
     conclusion = _field_from_blob(response_text, ("conclusion",))
     detail = _field_from_blob(response_text, ("detail",))
     parts = [p for p in (conclusion, detail) if p and p not in ("—", "-", "–")]
@@ -685,7 +679,6 @@ def _backend_meaning(response_text: str) -> str:
 
 
 def _meaning_for_result(response_text: str, result: dict, vtype: str = "") -> str:
-    """Prefer the classified verdict over a stale injector conclusion."""
     level = str((result or {}).get("level") or "").lower()
     confirmed = bool((result or {}).get("confirmed"))
     signal = str((result or {}).get("signal") or "")
@@ -963,7 +956,6 @@ def _window_around_body(body: str, needle: str, keep_markup: bool = False, radiu
         return ""
     start = max(0, idx - radius)
     end = min(len(body), idx + max(len(matched), 1) + radius)
-    # Snap to a tag or line start so the box does not open mid-heading.
     cut = body.rfind("\n", start, idx)
     if cut >= start:
         start = cut + 1
@@ -1092,9 +1084,6 @@ def _evidence_from_blob(text: str, vtype: str = "", marker: str = "") -> str:
         needles = list(_SQLI_ERROR_SIGNS)
     elif vt == "path_traversal":
         needles = list(_PATH_TRAVERSAL_SIGNS) + ["root:x:", "root:*:"]
-    # XSS: never search generic javascript:/<script across the whole page —
-    # that hits site chrome (theme toggles, first <script> in <head>).
-    # The probe window above is the only XSS locator.
     low = body.lower()
     for needle in sorted(needles, key=len, reverse=True):
         idx = low.find(needle.lower())
@@ -1217,7 +1206,6 @@ def _idor_dump_from_text(text: str) -> tuple[bool, str]:
 
 
 def _classify_test_result(vtype: str, request_text: str, response_text: str, test: dict) -> dict:
-    """Use injector detection flags. Do not treat a reflected probe as confirmation."""
     text = response_text or ""
     body = _response_body_only(text)
     body_lower = body.lower()
@@ -1259,7 +1247,6 @@ def _classify_test_result(vtype: str, request_text: str, response_text: str, tes
         else:
             for sign in _SQLI_ERROR_SIGNS:
                 if sign in body_lower and not _SQLI_CHROME_RE.search(body_lower):
-                    # Bare engine names in chrome ("SQLi DB: mysql") are not errors.
                     if sign in ("mysql", "sqlite", "odbc") and "error" not in body_lower and "exception" not in body_lower:
                         continue
                     confirmed = True
@@ -1422,12 +1409,10 @@ def _classify_test_result(vtype: str, request_text: str, response_text: str, tes
 
 
 def _tests_for_finding(finding: dict, vtype: str) -> list:
-    """GUI display only — library chooses which checks to run."""
     return list(get_active_tests(vtype, finding) or [])
 
 
 def _detection_from_blob(text: str) -> dict:
-    """Map injector / active_test flags into the dict plain_suite_analysis expects."""
     return {
         "found_in_body": _yes(_field_from_blob(text, ("found in body",))),
         "encoded": _yes(_field_from_blob(text, ("encoded",))),
@@ -1473,7 +1458,6 @@ def _request_display(request_text: str, response_text: str, test: dict) -> str:
 
 
 class TestResultCard(QFrame):
-    """One collapsible evidence card per Active Test check."""
 
     def __init__(self, index: int, test: dict, request_text: str,
                  response_text: str, result: dict, vtype: str = "", parent=None):
@@ -1661,12 +1645,11 @@ class PayloadTab(QWidget):
         self._mode = "manual"
         self._active_finding = None
         self._active_tests = []
-        self._run_state = "idle"  # idle | running | completed
-        self._last_results = []   # list of (test, request_text, response_text, result)
+        self._run_state = "idle"  
+        self._last_results = []   
         self._active_targets = []
         self.init_ui()
 
-    # ------------------------------------------------------------------ UI
     def init_ui(self):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -1694,7 +1677,6 @@ class PayloadTab(QWidget):
         root.setContentsMargins(0, 0, 4, 12)
         scroll.setWidget(body)
 
-        # ---- Header banner (slim, shared between manual / active) -----
         banner = QFrame()
         banner.setObjectName("payloadBanner")
         banner.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
@@ -1736,7 +1718,6 @@ class PayloadTab(QWidget):
         b_l.addWidget(self.target_label)
         root.addWidget(banner)
 
-        # ---- Active Test card -------------------------------------------------
         self.active_card = QFrame()
         self.active_card.setObjectName("activeCard")
         self.active_card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
@@ -1789,7 +1770,6 @@ class PayloadTab(QWidget):
         self.path_combo.currentIndexChanged.connect(self._on_path_chosen)
         ac.addWidget(self.path_combo)
 
-        # Pending checklist, shown before a run has been executed
         self.pending_lab = QLabel("Checks queued")
         self.pending_lab.setStyleSheet("font-size: 11px; font-weight: 800; color: #0f766e; border: none;")
         ac.addWidget(self.pending_lab)
@@ -1800,7 +1780,6 @@ class PayloadTab(QWidget):
         self.tests_layout.setSpacing(4)
         ac.addWidget(self.tests_host)
 
-        # Summary strip (verdict / confidence / stats) — populated after a run
         self.summary_card = QFrame()
         self.summary_card.setStyleSheet("""
             QFrame { background: #ffffff; border: none; border-radius: 12px; }
@@ -1812,7 +1791,6 @@ class PayloadTab(QWidget):
         self.summary_card.hide()
         ac.addWidget(self.summary_card)
 
-        # Per-check result cards
         self.results_lab = QLabel("TEST RESULTS")
         self.results_lab.setStyleSheet("font-size: 11px; font-weight: 800; color: #0f766e; border: none;")
         self.results_lab.hide()
@@ -1828,7 +1806,6 @@ class PayloadTab(QWidget):
         self.active_card.hide()
         root.addWidget(self.active_card)
 
-        # ---- Manual controls ---------------------------------------------
         self.manual_controls = QFrame()
         self.manual_controls.setObjectName("payloadCard")
         self.manual_controls.setStyleSheet("""
@@ -1936,7 +1913,6 @@ class PayloadTab(QWidget):
         btn_row.addStretch()
         root.addLayout(btn_row)
 
-        # ---- Manual raw HTTP boxes (hidden entirely in Active Test mode) --
         self.manual_split_widget = QWidget()
         self.manual_split_widget.setStyleSheet("background: transparent;")
         split = QVBoxLayout(self.manual_split_widget)
@@ -2026,7 +2002,6 @@ class PayloadTab(QWidget):
         self.send_button.clicked.connect(self.send_payload)
         self.update_payload_list("XSS")
 
-    # ---------------------------------------------------------- style helpers
     def _chip_qss(self, active: bool, tone: str = "neutral") -> str:
         if tone == "running":
             bg = "#f59e0b"
@@ -2150,7 +2125,6 @@ class PayloadTab(QWidget):
         self.request_editor.blockSignals(False)
         self._draft_request = text
 
-    # -------------------------------------------------------------- lifecycle
     def showEvent(self, event):
         super().showEvent(event)
         finding = None
@@ -2275,7 +2249,6 @@ class PayloadTab(QWidget):
                 new_lines.append(line)
         self.request_editor.setPlainText("\n".join(new_lines))
 
-    # ------------------------------------------------------------- active mode
     def load_from_finding(self, finding: dict):
         if not finding:
             return
@@ -2394,7 +2367,6 @@ class PayloadTab(QWidget):
         self.refresh_target()
         self.update_payload_list(self.payload_type.currentText())
 
-    # ------------------------------------------------------------ manual mode
     def update_payload_list(self, payload_type):
         if self._mode == "active":
             return
@@ -2424,7 +2396,6 @@ class PayloadTab(QWidget):
         self.response_area.clear()
         self._fit_response_area()
 
-    # ---------------------------------------------------------------- sending
     def send_payload(self):
         QTimer.singleShot(0, self._do_send_payload)
 

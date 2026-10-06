@@ -15,7 +15,6 @@ _AUTH_PATH_RE = re.compile(
     re.I,
 )
 _SEARCH_PATH_RE = re.compile(r"/(?:search|find|query|products?/search)\b", re.I)
-# Paths written in minified JS, quoted or concatenated — must appear in artefact text.
 _LOOSE_API_PATH_RE = re.compile(
     r"(/(?:api|rest|v\d+)[A-Za-z0-9_./\-]*(?:search|find|query|login)[A-Za-z0-9_./\-]*)",
     re.I,
@@ -182,10 +181,6 @@ def _targets_from_hash_text(text: str, page_url: str, root: str, out: list, seen
         abs_url = _hash_to_http("#" + p.fragment, page_url)
         _targets_from_url(abs_url, root, out, seen)
 def discover_request_targets(page: dict, base_url: str = "") -> list:
-    """
-    Same-host request targets for Start Scan probes.
-    Does not submit forms or send payloads.
-    """
     if isinstance(page, str):
         page = {"body": page, "url": base_url or ""}
     page = page or {}
@@ -246,10 +241,6 @@ def discover_request_targets(page: dict, base_url: str = "") -> list:
             _targets_from_url(abs_url, root, out, seen)
     return out
 def discover_script_sinks(text: str, base_url: str) -> dict:
-    """
-    Endpoints and hash routes copied out of script that was actually downloaded.
-    Does not invent paths. Query names come from the same literal (?q=, &id=).
-    """
     raw = (text or "").replace("\\/", "/")
     origin = _origin(base_url)
     if not origin:

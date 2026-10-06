@@ -1,8 +1,3 @@
-"""Recommended payloads (manual) and Active Test exploit-chain cases.
-Each vuln_type is an ordered chain. Active Test runs steps in order.
-A later step is evidence of exploitation only if an earlier step already
-matched. These are authorised proof chains, not a full dump of the database.
-"""
 from __future__ import annotations
 RECOMMENDED_PAYLOADS: dict[str, list[str]] = {
     "XSS": [

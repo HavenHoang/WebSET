@@ -65,7 +65,7 @@ class LoginPage(QWidget):
         p_lab.setStyleSheet("font-size: 12px; font-weight: 700; color: #475569;")
         layout.addWidget(p_lab)
         self.password = QLineEdit()
-        self.password.setPlaceholderText("Enter password (min 4 characters)")
+        self.password.setPlaceholderText("Enter password (min 8 characters)")
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
         layout.addWidget(self.password)
         layout.addSpacing(6)
@@ -165,8 +165,8 @@ class LoginPage(QWidget):
         if not username:
             self.hint.setText("Username is required to register.")
             return
-        if len(password) < 4:
-            self.hint.setText("Password must be at least 4 characters.")
+        if len(password) < 8:
+            self.hint.setText("Password must be at least 8 characters.")
             return
         try:
             from core.db import register_user

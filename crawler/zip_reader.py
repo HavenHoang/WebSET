@@ -1,4 +1,3 @@
-"""ZIP helpers for static Get Stack / optional Start Scan support."""
 from __future__ import annotations
 
 import os

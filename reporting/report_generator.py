@@ -80,9 +80,9 @@ def generate_report(
 
     cwe_summary = dict(Counter(f.get("cwe_id") for f in findings if f.get("cwe_id")))
     owasp_summary = dict(Counter(
-        f.get("owasp_2021") or f.get("owasp")
+        f.get("owasp") or f.get("owasp_2025")
         for f in findings
-        if f.get("owasp_2021") or f.get("owasp")
+        if f.get("owasp") or f.get("owasp_2025")
     ))
     nist_summary = dict(Counter(f.get("nist") for f in findings if f.get("nist")))
     sans_summary = dict(Counter(f.get("sans") for f in findings if f.get("sans")))

@@ -1,5 +1,3 @@
-"""Keep Active Test / payload sends inside authorised host scope."""
-
 from __future__ import annotations
 from urllib.parse import urlparse
 

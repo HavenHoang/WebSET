@@ -95,7 +95,7 @@ RULES: dict[str, dict] = {
         "wasc_id": "WASC-13",
         "owasp": "A02:2025 Security Misconfiguration",
         "nist": "NIST SP 800-53 Rev. 5 AC-4",
-        "sans": "In CWE Top 25 (2025)",
+        "sans": "CWE Top 25 (2025) #20 — CWE-200",
         "description_template": (
             "No Referrer-Policy header was returned by {location}. The browser "
             "default may send the full URL, including path and query string, to "
@@ -134,7 +134,7 @@ RULES: dict[str, dict] = {
         "wasc_id": "WASC-13",
         "owasp": "A02:2025 Security Misconfiguration",
         "nist": "NIST SP 800-53 Rev. 5 CM-6",
-        "sans": "In CWE Top 25 (2025)",
+        "sans": "CWE Top 25 (2025) #20 — CWE-200",
         "description_template": (
             "A response header from {location} discloses software version "
             "information ({header_name}: {header_value}). Version banners let an "
@@ -193,7 +193,7 @@ RULES: dict[str, dict] = {
         "vulnerability": "Sensitive Path Exposure",
         "severity": "Medium",
         "cwe_id": "CWE-538",
-        "wasc_id": "WASC-16",
+        "wasc_id": "WASC-15",
         "owasp": "A02:2025 Security Misconfiguration",
         "nist": "NIST SP 800-53 Rev. 5 AC-3",
         "sans": "Not in CWE Top 25 (2025)",
@@ -233,11 +233,11 @@ RULES: dict[str, dict] = {
     "exposed-key-material": {
         "vulnerability": "Cryptographic Key Material Exposed",
         "severity": "High",
-        "cwe_id": "CWE-321",
+        "cwe_id": "CWE-200",
         "wasc_id": "WASC-13",
         "owasp": "A04:2025 Cryptographic Failures",
         "nist": "NIST SP 800-53 Rev. 5 SC-12",
-        "sans": "CWE Top 25 (2025) - #8",
+        "sans": "CWE Top 25 (2025) #20 — CWE-200",
         "description_template": (
             "{location} returned content that matches published key material "
             "(PEM, JWK, or a clearly labelled public/private key file). Even a "
@@ -405,9 +405,9 @@ RULES: dict[str, dict] = {
         "severity": "High",
         "cwe_id": "CWE-89",
         "wasc_id": "WASC-19",
-        "owasp": "A07:2025 Authentication Failures",
+        "owasp": "A05:2025 Injection",
         "nist": "NIST SP 800-53 Rev. 5 SI-10",
-        "sans": "CWE Top 25 (2025) - #2",
+        "sans": "CWE Top 25 (2025) #2 — CWE-89",
         "description_template": (
             "Submitting a controlled SQL metacharacter sequence in '{param}' at "
             "{location} produced an authentication success signal (session "
@@ -426,7 +426,7 @@ RULES: dict[str, dict] = {
         "vulnerability": "Potential NoSQL Operator Injection",
         "severity": "High",
         "cwe_id": "CWE-943",
-        "wasc_id": "WASC-19",
+        "wasc_id": "WASC-20",
         "owasp": "A05:2025 Injection",
         "nist": "NIST SP 800-53 Rev. 5 SI-10",
         "sans": "Not in CWE Top 25 (2025)",
@@ -451,7 +451,7 @@ RULES: dict[str, dict] = {
         "wasc_id": "WASC-33",
         "owasp": "A01:2025 Broken Access Control",
         "nist": "NIST SP 800-53 Rev. 5 AC-3",
-        "sans": "CWE Top 25 (2025) - #8",
+        "sans": "CWE Top 25 (2025) #6 — CWE-22",
         "description_template": (
             "Varying '{param}' on {location} with a traversal sequence caused "
             "the server to return content whose type or marker is consistent "
@@ -495,7 +495,7 @@ RULES: dict[str, dict] = {
         "wasc_id": "WASC-31",
         "owasp": "A05:2025 Injection",
         "nist": "NIST SP 800-53 Rev. 5 SI-10",
-        "sans": "CWE Top 25 (2025) - #7",
+        "sans": "CWE Top 25 (2025) #9 — CWE-78",
         "description_template": (
             "A marker placed in '{param}' at {location} came back in a form "
             "consistent with shell interpolation (timing aside, echoed command "
@@ -515,7 +515,7 @@ RULES: dict[str, dict] = {
         "wasc_id": "WASC-31",
         "owasp": "A05:2025 Injection",
         "nist": "NIST SP 800-53 Rev. 5 SI-10",
-        "sans": "CWE Top 25 (2025) - #7",
+        "sans": "CWE Top 25 (2025) #9 — CWE-78",
         "description_template": (
             "A marker placed in '{param}' at {location} came back in a form "
             "consistent with shell interpolation (timing aside, echoed command "
@@ -553,7 +553,7 @@ RULES: dict[str, dict] = {
         "wasc_id": "WASC-9",
         "owasp": "A01:2025 Broken Access Control",
         "nist": "NIST SP 800-53 Rev. 5 SC-23",
-        "sans": "CWE Top 25 (2025)",
+        "sans": "CWE Top 25 (2025) #3 — CWE-352",
         "description_template": (
             "A POST form on {location} has no hidden field whose name looks "
             "like a CSRF or anti-forgery token. A third-party page can submit "
@@ -570,9 +570,9 @@ RULES: dict[str, dict] = {
         "severity": "Medium",
         "cwe_id": "CWE-330",
         "wasc_id": "WASC-18",
-        "owasp": "A07:2025 Identification and Authentication Failures",
+        "owasp": "A07:2025 Authentication Failures",
         "nist": "NIST SP 800-53 Rev. 5 IA-5",
-        "sans": "CWE Top 25 (2025)",
+        "sans": "Not in CWE Top 25 (2025)",
         "description_template": (
             "A session cookie set by {location} has a short or numeric-only "
             "value, so identifiers may be predictable."
@@ -587,7 +587,7 @@ RULES: dict[str, dict] = {
         "severity": "Medium",
         "cwe_id": "CWE-602",
         "wasc_id": "WASC-20",
-        "owasp": "A04:2025 Insecure Design",
+        "owasp": "A06:2025 Insecure Design",
         "nist": "NIST SP 800-53 Rev. 5 SI-10",
         "sans": "Not in CWE Top 25 (2025)",
         "description_template": (
@@ -606,9 +606,9 @@ RULES: dict[str, dict] = {
         "severity": "Medium",
         "cwe_id": "CWE-434",
         "wasc_id": "WASC-20",
-        "owasp": "A04:2025 Insecure Design",
+        "owasp": "A06:2025 Insecure Design",
         "nist": "NIST SP 800-53 Rev. 5 SI-10",
-        "sans": "Not in CWE Top 25 (2025)",
+        "sans": "CWE Top 25 (2025) #12 — CWE-434",
         "description_template": (
             "{location} exposes a file-upload input. If the server does not "
             "validate type, size and storage path, uploaded content can be "
@@ -688,10 +688,10 @@ RULES: dict[str, dict] = {
         "vulnerability": "Dangerous Dynamic Code Execution",
         "severity": "High",
         "cwe_id": "CWE-95",
-        "wasc_id": "WASC-31",
+        "wasc_id": "WASC-20",
         "owasp": "A05:2025 Injection",
         "nist": "NIST SP 800-53 Rev. 5 SI-10",
-        "sans": "CWE Top 25 (2025) - #11",
+        "sans": "Not in CWE Top 25 (2025)",
         "description_template": (
             "A dynamic code-execution sink such as eval() or Function() was "
             "found in {location}. If user-controlled data reaches this sink, "
@@ -712,13 +712,15 @@ RULES: dict[str, dict] = {
         "nist": "NIST SP 800-53 Rev. 5 SI-10",
         "sans": "CWE Top 25 (2025) - #1",
         "description_template": (
-            "An HTML sink such as innerHTML, document.write or "
-            "dangerouslySetInnerHTML was found in {location}. Unencoded data "
-            "written here becomes a cross-site scripting path."
+            "An HTML sink was found in {location}. This includes JavaScript "
+            "sinks such as innerHTML, document.write or dangerouslySetInnerHTML, "
+            "and PHP output that writes $_GET, $_POST or $_REQUEST into the "
+            "page. Unencoded data written here becomes a cross-site scripting path."
         ),
         "remediation": (
-            "Use textContent or the framework's encoding helpers. Avoid raw "
-            "HTML insertion unless the content is already sanitised."
+            "Use textContent or the framework's encoding helpers. In PHP, "
+            "pass user input through htmlspecialchars before echo or print. "
+            "Avoid raw HTML insertion unless the content is already sanitised."
         ),
     },
     "static-sql-concat": {
@@ -745,7 +747,7 @@ RULES: dict[str, dict] = {
         "wasc_id": "WASC-31",
         "owasp": "A05:2025 Injection",
         "nist": "NIST SP 800-53 Rev. 5 SI-10",
-        "sans": "CWE Top 25 (2025) - #7",
+        "sans": "CWE Top 25 (2025) #9 — CWE-78",
         "description_template": (
             "An operating-system command execution API was found in {location}. "
             "If request data reaches this call, command injection is possible."
@@ -760,7 +762,7 @@ RULES: dict[str, dict] = {
         "vulnerability": "Weak Cryptography",
         "severity": "Medium",
         "cwe_id": "CWE-327",
-        "wasc_id": "WASC-04",
+        "wasc_id": "WASC-15",
         "owasp": "A04:2025 Cryptographic Failures",
         "nist": "NIST SP 800-53 Rev. 5 SC-13",
         "sans": "Not in CWE Top 25 (2025)",
@@ -781,7 +783,7 @@ RULES: dict[str, dict] = {
         "wasc_id": "WASC-33",
         "owasp": "A01:2025 Broken Access Control",
         "nist": "NIST SP 800-53 Rev. 5 AC-3",
-        "sans": "CWE Top 25 (2025) - #8",
+        "sans": "CWE Top 25 (2025) #6 — CWE-22",
         "description_template": (
             "A filesystem API in {location} appears to take a request parameter "
             "as part of the path. That pattern is a directory-traversal sink."
@@ -814,7 +816,7 @@ RULES: dict[str, dict] = {
         "severity": "Low",
         "cwe_id": "CWE-390",
         "wasc_id": "WASC-13",
-        "owasp": "A09:2025 Security Logging and Monitoring Failures",
+        "owasp": "A10:2025 Mishandling of Exceptional Conditions",
         "nist": "NIST SP 800-53 Rev. 5 SI-11",
         "sans": "Not in CWE Top 25 (2025)",
         "description_template": (
@@ -832,7 +834,7 @@ RULES: dict[str, dict] = {
         "severity": "Low",
         "cwe_id": "CWE-489",
         "wasc_id": "WASC-13",
-        "owasp": "A09:2025 Security Logging and Monitoring Failures",
+        "owasp": "A09:2025 Security Logging and Alerting Failures",
         "nist": "NIST SP 800-53 Rev. 5 SI-11",
         "sans": "Not in CWE Top 25 (2025)",
         "description_template": (
@@ -849,7 +851,7 @@ RULES: dict[str, dict] = {
         "severity": "Low",
         "cwe_id": "CWE-546",
         "wasc_id": "WASC-15",
-        "owasp": "A04:2025 Insecure Design",
+        "owasp": "A06:2025 Insecure Design",
         "nist": "NIST SP 800-53 Rev. 5 SA-11",
         "sans": "Not in CWE Top 25 (2025)",
         "description_template": (
@@ -904,9 +906,9 @@ RULES: dict[str, dict] = {
         "severity": "High",
         "cwe_id": "CWE-918",
         "wasc_id": "WASC-15",
-        "owasp": "A10:2021 Server-Side Request Forgery",
+        "owasp": "A01:2025 Broken Access Control",
         "nist": "NIST SP 800-53 Rev. 5 SI-10 / SC-7",
-        "sans": "CWE Top 25 (2025) - #18",
+        "sans": "CWE Top 25 (2025) #22 — CWE-918",
         "description_template": (
             "An HTTP or URL-fetch API in {location} is reached by request data. "
             "If the destination is not constrained, an attacker can make the "
@@ -924,9 +926,9 @@ RULES: dict[str, dict] = {
         "severity": "High",
         "cwe_id": "CWE-502",
         "wasc_id": "WASC-15",
-        "owasp": "A08:2025 Software and Data Integrity Failures",
+        "owasp": "A08:2025 Software or Data Integrity Failures",
         "nist": "NIST SP 800-53 Rev. 5 SI-10 / SI-7",
-        "sans": "CWE Top 25 (2025) - #16",
+        "sans": "CWE Top 25 (2025) #15 — CWE-502",
         "description_template": (
             "A native deserializer (unserialize, pickle, yaml.load, "
             "ObjectInputStream or similar) was found in {location}. Loading "
@@ -1005,7 +1007,7 @@ RULES: dict[str, dict] = {
         "wasc_id": "WASC-9",
         "owasp": "A01:2025 Broken Access Control",
         "nist": "NIST SP 800-53 Rev. 5 SC-23 / AC-3",
-        "sans": "CWE Top 25 (2025) - #4",
+        "sans": "CWE Top 25 (2025) #3 — CWE-352",
         "description_template": (
             "CSRF protection is switched off or bypassed in {location}. State-"
             "changing requests can then be issued from a third-party page "
@@ -1022,9 +1024,9 @@ RULES: dict[str, dict] = {
         "severity": "Medium",
         "cwe_id": "CWE-434",
         "wasc_id": "WASC-20",
-        "owasp": "A04:2025 Insecure Design",
+        "owasp": "A06:2025 Insecure Design",
         "nist": "NIST SP 800-53 Rev. 5 SI-10 / CM-7",
-        "sans": "CWE Top 25 (2025) - #10",
+        "sans": "CWE Top 25 (2025) #12 — CWE-434",
         "description_template": (
             "A file-upload API in {location} is reached by request data. "
             "Without type, size and path checks, uploaded files can overwrite "
@@ -1059,8 +1061,6 @@ RULES: dict[str, dict] = {
     },
 }
 
-# Optional dual-year / multi-control fields. Existing owasp/nist/sans stay
-# required so stored findings and STRICT_VALIDATION do not change.
 RULE_KEYS = (
     "vulnerability",
     "severity",
@@ -1073,326 +1073,271 @@ RULE_KEYS = (
     "remediation",
 )
 
-# OWASP Top 10 2021 buckets used by Dashboard graphs.
-# 2025 codes on each rule are mapped to these buckets at display time.
 _STANDARD_ENRICHMENT = {
     "header-xfo": {
-        "owasp_2021": "A05:2021 Security Misconfiguration",
         "owasp_2025": "A02:2025 Security Misconfiguration",
         "nist": "NIST SP 800-53 Rev. 5 SC-18 / CM-6",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "header-csp": {
-        "owasp_2021": "A05:2021 Security Misconfiguration",
         "owasp_2025": "A02:2025 Security Misconfiguration",
         "nist": "NIST SP 800-53 Rev. 5 SC-18 / CM-6 / SI-10",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "header-hsts": {
-        "owasp_2021": "A02:2021 Cryptographic Failures",
         "owasp_2025": "A04:2025 Cryptographic Failures",
         "nist": "NIST SP 800-53 Rev. 5 SC-8 / SC-23",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "header-nosniff": {
-        "owasp_2021": "A05:2021 Security Misconfiguration",
         "owasp_2025": "A02:2025 Security Misconfiguration",
         "nist": "NIST SP 800-53 Rev. 5 SC-18 / CM-6",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "header-referrer-policy": {
-        "owasp_2021": "A01:2021 Broken Access Control",
         "owasp_2025": "A02:2025 Security Misconfiguration",
         "nist": "NIST SP 800-53 Rev. 5 AC-4 / SC-8",
-        "sans": "CWE Top 25 (2024) #16 — CWE-200",
+        "sans": "CWE Top 25 (2025) #20 — CWE-200",
     },
     "header-cors": {
-        "owasp_2021": "A05:2021 Security Misconfiguration",
         "owasp_2025": "A02:2025 Security Misconfiguration",
         "nist": "NIST SP 800-53 Rev. 5 AC-4 / SC-7",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "info-disclosure-server": {
-        "owasp_2021": "A05:2021 Security Misconfiguration",
         "owasp_2025": "A02:2025 Security Misconfiguration",
         "nist": "NIST SP 800-53 Rev. 5 CM-6 / SI-11",
-        "sans": "CWE Top 25 (2024) #16 — CWE-200",
+        "sans": "CWE Top 25 (2025) #20 — CWE-200",
     },
     "verbose-error": {
-        "owasp_2021": "A05:2021 Security Misconfiguration",
         "owasp_2025": "A02:2025 Security Misconfiguration",
         "nist": "NIST SP 800-53 Rev. 5 SI-11 / SI-10",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "dir-listing": {
-        "owasp_2021": "A05:2021 Security Misconfiguration",
         "owasp_2025": "A02:2025 Security Misconfiguration",
         "nist": "NIST SP 800-53 Rev. 5 CM-6 / AC-3",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "sensitive-path": {
-        "owasp_2021": "A01:2021 Broken Access Control",
-        "owasp_2025": "A01:2025 Broken Access Control",
+        "owasp_2025": "A02:2025 Security Misconfiguration",
         "nist": "NIST SP 800-53 Rev. 5 AC-3 / CM-7",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "sensitive-file": {
-        "owasp_2021": "A01:2021 Broken Access Control",
-        "owasp_2025": "A01:2025 Broken Access Control",
+        "owasp_2025": "A02:2025 Security Misconfiguration",
         "nist": "NIST SP 800-53 Rev. 5 AC-3 / AC-6",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "exposed-key-material": {
-        "owasp_2021": "A02:2021 Cryptographic Failures",
         "owasp_2025": "A04:2025 Cryptographic Failures",
         "nist": "NIST SP 800-53 Rev. 5 SC-12 / IA-5",
-        "sans": "CWE Top 25 (2024) #18 — CWE-798",
+        "sans": "CWE Top 25 (2025) #20 — CWE-200",
     },
     "client-privileged-route": {
-        "owasp_2021": "A01:2021 Broken Access Control",
-        "owasp_2025": "A01:2025 Broken Access Control",
+        "owasp_2025": "A02:2025 Security Misconfiguration",
         "nist": "NIST SP 800-53 Rev. 5 AC-3 / CM-6",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "cookie-secure": {
-        "owasp_2021": "A02:2021 Cryptographic Failures",
         "owasp_2025": "A04:2025 Cryptographic Failures",
         "nist": "NIST SP 800-53 Rev. 5 SC-8 / SC-23",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "cookie-httponly": {
-        "owasp_2021": "A05:2021 Security Misconfiguration",
         "owasp_2025": "A02:2025 Security Misconfiguration",
         "nist": "NIST SP 800-53 Rev. 5 SC-23 / SI-10",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "cookie-samesite": {
-        "owasp_2021": "A01:2021 Broken Access Control",
         "owasp_2025": "A01:2025 Broken Access Control",
         "nist": "NIST SP 800-53 Rev. 5 SC-23 / AC-3",
-        "sans": "CWE Top 25 (2024) #4 — CWE-352",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "transport-plaintext": {
-        "owasp_2021": "A02:2021 Cryptographic Failures",
         "owasp_2025": "A04:2025 Cryptographic Failures",
         "nist": "NIST SP 800-53 Rev. 5 SC-8 / SC-13",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "xss-reflected": {
-        "owasp_2021": "A03:2021 Injection",
         "owasp_2025": "A05:2025 Injection",
         "nist": "NIST SP 800-53 Rev. 5 SI-10 / SC-18",
-        "sans": "CWE Top 25 (2024) #1 — CWE-79",
+        "sans": "CWE Top 25 (2025) #1 — CWE-79",
     },
     "sqli-error": {
-        "owasp_2021": "A03:2021 Injection",
         "owasp_2025": "A05:2025 Injection",
         "nist": "NIST SP 800-53 Rev. 5 SI-10 / AC-3",
-        "sans": "CWE Top 25 (2024) #2 — CWE-89",
+        "sans": "CWE Top 25 (2025) #2 — CWE-89",
     },
     "sqli-auth": {
-        "owasp_2021": "A07:2021 Identification and Authentication Failures",
-        "owasp_2025": "A07:2025 Authentication Failures",
+        "owasp_2025": "A05:2025 Injection",
         "nist": "NIST SP 800-53 Rev. 5 SI-10 / IA-2 / IA-5",
-        "sans": "CWE Top 25 (2024) #2 — CWE-89",
+        "sans": "CWE Top 25 (2025) #2 — CWE-89",
     },
     "nosqli": {
-        "owasp_2021": "A03:2021 Injection",
         "owasp_2025": "A05:2025 Injection",
         "nist": "NIST SP 800-53 Rev. 5 SI-10 / AC-3",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "path-traversal": {
-        "owasp_2021": "A01:2021 Broken Access Control",
         "owasp_2025": "A01:2025 Broken Access Control",
         "nist": "NIST SP 800-53 Rev. 5 AC-3 / SI-10",
-        "sans": "CWE Top 25 (2024) #8 — CWE-22",
+        "sans": "CWE Top 25 (2025) #6 — CWE-22",
     },
     "xxe": {
-        "owasp_2021": "A05:2021 Security Misconfiguration",
         "owasp_2025": "A05:2025 Injection",
         "nist": "NIST SP 800-53 Rev. 5 SI-10 / SC-7",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "cmdi": {
-        "owasp_2021": "A03:2021 Injection",
         "owasp_2025": "A05:2025 Injection",
         "nist": "NIST SP 800-53 Rev. 5 SI-10 / CM-7",
-        "sans": "CWE Top 25 (2024) #7 — CWE-78",
+        "sans": "CWE Top 25 (2025) #9 — CWE-78",
     },
     "cmd-injection": {
-        "owasp_2021": "A03:2021 Injection",
         "owasp_2025": "A05:2025 Injection",
         "nist": "NIST SP 800-53 Rev. 5 SI-10 / CM-7",
-        "sans": "CWE Top 25 (2024) #7 — CWE-78",
+        "sans": "CWE Top 25 (2025) #9 — CWE-78",
     },
     "open-redirect": {
-        "owasp_2021": "A01:2021 Broken Access Control",
         "owasp_2025": "A01:2025 Broken Access Control",
         "nist": "NIST SP 800-53 Rev. 5 AC-4 / SI-10",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "csrf-form": {
-        "owasp_2021": "A01:2021 Broken Access Control",
         "owasp_2025": "A01:2025 Broken Access Control",
         "nist": "NIST SP 800-53 Rev. 5 SC-23 / AC-3",
-        "sans": "CWE Top 25 (2024) #4 — CWE-352",
+        "sans": "CWE Top 25 (2025) #3 — CWE-352",
     },
     "weak-session-id": {
-        "owasp_2021": "A07:2021 Identification and Authentication Failures",
         "owasp_2025": "A07:2025 Authentication Failures",
         "nist": "NIST SP 800-53 Rev. 5 IA-5 / SC-23",
-        "sans": "CWE Top 25 (2024) #15 — CWE-330",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "client-validation-bypass": {
-        "owasp_2021": "A04:2021 Insecure Design",
-        "owasp_2025": "A04:2025 Insecure Design",
+        "owasp_2025": "A06:2025 Insecure Design",
         "nist": "NIST SP 800-53 Rev. 5 SI-10 / SA-8",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "upload-surface": {
-        "owasp_2021": "A04:2021 Insecure Design",
-        "owasp_2025": "A04:2025 Insecure Design",
+        "owasp_2025": "A06:2025 Insecure Design",
         "nist": "NIST SP 800-53 Rev. 5 SI-10 / CM-7",
-        "sans": "CWE Top 25 (2024) #10 — CWE-434",
+        "sans": "CWE Top 25 (2025) #12 — CWE-434",
     },
     "static-env-file": {
-        "owasp_2021": "A05:2021 Security Misconfiguration",
         "owasp_2025": "A02:2025 Security Misconfiguration",
         "nist": "NIST SP 800-53 Rev. 5 CM-6 / IA-5",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "static-debug-enabled": {
-        "owasp_2021": "A05:2021 Security Misconfiguration",
         "owasp_2025": "A02:2025 Security Misconfiguration",
         "nist": "NIST SP 800-53 Rev. 5 CM-7 / SI-11",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "static-secret-pattern": {
-        "owasp_2021": "A07:2021 Identification and Authentication Failures",
         "owasp_2025": "A07:2025 Authentication Failures",
         "nist": "NIST SP 800-53 Rev. 5 IA-5 / SC-12",
-        "sans": "CWE Top 25 (2024) #18 — CWE-798",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "static-eval": {
-        "owasp_2021": "A03:2021 Injection",
         "owasp_2025": "A05:2025 Injection",
         "nist": "NIST SP 800-53 Rev. 5 SI-10 / CM-7",
-        "sans": "CWE Top 25 (2024) #11 — CWE-94",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "static-html-sink": {
-        "owasp_2021": "A03:2021 Injection",
         "owasp_2025": "A05:2025 Injection",
         "nist": "NIST SP 800-53 Rev. 5 SI-10 / SC-18",
-        "sans": "CWE Top 25 (2024) #1 — CWE-79",
+        "sans": "CWE Top 25 (2025) #1 — CWE-79",
     },
     "static-sql-concat": {
-        "owasp_2021": "A03:2021 Injection",
         "owasp_2025": "A05:2025 Injection",
         "nist": "NIST SP 800-53 Rev. 5 SI-10 / AC-3",
-        "sans": "CWE Top 25 (2024) #2 — CWE-89",
+        "sans": "CWE Top 25 (2025) #2 — CWE-89",
     },
     "static-command-exec": {
-        "owasp_2021": "A03:2021 Injection",
         "owasp_2025": "A05:2025 Injection",
         "nist": "NIST SP 800-53 Rev. 5 SI-10 / CM-7",
-        "sans": "CWE Top 25 (2024) #7 — CWE-78",
+        "sans": "CWE Top 25 (2025) #9 — CWE-78",
     },
     "static-weak-crypto": {
-        "owasp_2021": "A02:2021 Cryptographic Failures",
         "owasp_2025": "A04:2025 Cryptographic Failures",
         "nist": "NIST SP 800-53 Rev. 5 SC-13 / SC-12",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "static-path-sink": {
-        "owasp_2021": "A01:2021 Broken Access Control",
         "owasp_2025": "A01:2025 Broken Access Control",
         "nist": "NIST SP 800-53 Rev. 5 AC-3 / SI-10",
-        "sans": "CWE Top 25 (2024) #8 — CWE-22",
+        "sans": "CWE Top 25 (2025) #6 — CWE-22",
     },
     "static-jwt-hardcoded": {
-        "owasp_2021": "A07:2021 Identification and Authentication Failures",
         "owasp_2025": "A07:2025 Authentication Failures",
         "nist": "NIST SP 800-53 Rev. 5 IA-5 / SC-12",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "static-empty-handler": {
-        "owasp_2021": "A09:2021 Security Logging and Monitoring Failures",
-        "owasp_2025": "A09:2025 Security Logging and Monitoring Failures",
+        "owasp_2025": "A10:2025 Mishandling of Exceptional Conditions",
         "nist": "NIST SP 800-53 Rev. 5 SI-11 / AU-3",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "static-debug-residue": {
-        "owasp_2021": "A09:2021 Security Logging and Monitoring Failures",
-        "owasp_2025": "A09:2025 Security Logging and Monitoring Failures",
+        "owasp_2025": "A09:2025 Security Logging and Alerting Failures",
         "nist": "NIST SP 800-53 Rev. 5 SI-11 / AU-3",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "static-todo-secret": {
-        "owasp_2021": "A04:2021 Insecure Design",
-        "owasp_2025": "A04:2025 Insecure Design",
+        "owasp_2025": "A06:2025 Insecure Design",
         "nist": "NIST SP 800-53 Rev. 5 SA-11 / SI-10",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "header-permissions-policy": {
-        "owasp_2021": "A05:2021 Security Misconfiguration",
         "owasp_2025": "A02:2025 Security Misconfiguration",
         "nist": "NIST SP 800-53 Rev. 5 CM-6 / SC-18",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "password-autocomplete": {
-        "owasp_2021": "A07:2021 Identification and Authentication Failures",
         "owasp_2025": "A07:2025 Authentication Failures",
         "nist": "NIST SP 800-53 Rev. 5 IA-5 / SC-23",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "static-ssrf": {
-        "owasp_2021": "A10:2021 Server-Side Request Forgery",
-        "owasp_2025": "A10:2021 Server-Side Request Forgery",
+        "owasp_2025": "A01:2025 Broken Access Control",
         "nist": "NIST SP 800-53 Rev. 5 SI-10 / SC-7",
-        "sans": "CWE Top 25 (2024) #19 — CWE-918",
+        "sans": "CWE Top 25 (2025) #22 — CWE-918",
     },
     "static-deser": {
-        "owasp_2021": "A08:2021 Software and Data Integrity Failures",
-        "owasp_2025": "A08:2025 Software and Data Integrity Failures",
+        "owasp_2025": "A08:2025 Software or Data Integrity Failures",
         "nist": "NIST SP 800-53 Rev. 5 SI-10 / SI-7",
-        "sans": "CWE Top 25 (2024) #16 — CWE-502",
+        "sans": "CWE Top 25 (2025) #15 — CWE-502",
     },
     "static-open-redirect": {
-        "owasp_2021": "A01:2021 Broken Access Control",
         "owasp_2025": "A01:2025 Broken Access Control",
         "nist": "NIST SP 800-53 Rev. 5 AC-4 / SI-10",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "static-xxe": {
-        "owasp_2021": "A05:2021 Security Misconfiguration",
         "owasp_2025": "A05:2025 Injection",
         "nist": "NIST SP 800-53 Rev. 5 SI-10 / SC-7",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "static-cors-star": {
-        "owasp_2021": "A05:2021 Security Misconfiguration",
         "owasp_2025": "A02:2025 Security Misconfiguration",
         "nist": "NIST SP 800-53 Rev. 5 AC-4 / SC-7",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
     "static-csrf-disabled": {
-        "owasp_2021": "A01:2021 Broken Access Control",
         "owasp_2025": "A01:2025 Broken Access Control",
         "nist": "NIST SP 800-53 Rev. 5 SC-23 / AC-3",
-        "sans": "CWE Top 25 (2024) #4 — CWE-352",
+        "sans": "CWE Top 25 (2025) #3 — CWE-352",
     },
     "static-upload-sink": {
-        "owasp_2021": "A04:2021 Insecure Design",
-        "owasp_2025": "A04:2025 Insecure Design",
+        "owasp_2025": "A06:2025 Insecure Design",
         "nist": "NIST SP 800-53 Rev. 5 SI-10 / CM-7",
-        "sans": "CWE Top 25 (2024) #10 — CWE-434",
+        "sans": "CWE Top 25 (2025) #12 — CWE-434",
     },
     "static-sensitive-artifact": {
-        "owasp_2021": "A05:2021 Security Misconfiguration",
         "owasp_2025": "A02:2025 Security Misconfiguration",
         "nist": "NIST SP 800-53 Rev. 5 AC-3 / IA-5",
-        "sans": "Not in CWE Top 25 (2024)",
+        "sans": "Not in CWE Top 25 (2025)",
     },
 }
 
@@ -1402,8 +1347,6 @@ def _apply_standard_enrichment() -> None:
         rule = RULES.get(rid)
         if not rule:
             continue
-        if extra.get("owasp_2021"):
-            rule["owasp_2021"] = extra["owasp_2021"]
         if extra.get("owasp_2025"):
             rule["owasp_2025"] = extra["owasp_2025"]
         if extra.get("nist"):

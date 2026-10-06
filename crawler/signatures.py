@@ -1,4 +1,3 @@
-"""Lightweight tech fingerprints (headers, body, filenames) + version patterns."""
 from __future__ import annotations
 import re
 HEADER_RULES = [
@@ -40,7 +39,7 @@ FILE_RULES = [
     ("Docker", "Infrastructure", "", lambda paths: any(p.endswith("dockerfile") or "docker-compose" in p for p in paths)),
     ("Java", "Language", "", lambda paths: any(p.endswith(".java") or p.endswith("pom.xml") for p in paths)),
     ("Python", "Language", "", lambda paths: any(p.endswith("requirements.txt") or p.endswith(".py") for p in paths)),
-    ("Laravel", "Framework", "", lambda paths: any(p.endswith("artisan") or p.endswith("composer.json") for p in paths)),
+    ("Laravel", "Framework", "", lambda paths: any(p == "artisan" or p.endswith("/artisan") for p in paths)),
     ("SQLite", "Database", "", lambda paths: any(p.endswith((".sqlite", ".sqlite3", ".db")) for p in paths)),
     ("SQL Database", "Database", "", lambda paths: any(p.endswith(".sql") for p in paths)),
 ]
@@ -56,7 +55,6 @@ VERSION_PATTERNS = {
     "Express": re.compile(r"express[/-]?([\d.]+)", re.I),
 }
 
-# Generic same-origin probes for surface checks. Not target-specific.
 INTERESTING_PATHS = (
     "/robots.txt",
     "/sitemap.xml",

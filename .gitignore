@@ -1,3 +1,4 @@
 webset.db
 data/webset.db
 __pycache__/
+lab_target/.env

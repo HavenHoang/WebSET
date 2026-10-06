@@ -1,4 +1,3 @@
-"""Limit crawl/fetch to the authorised target host and start path."""
 from __future__ import annotations
 from urllib.parse import urlparse, urlunparse
 _FILE_EXT = (
@@ -46,11 +45,6 @@ def path_of(url: str) -> str:
         path = path.rstrip("/")
     return path
 def _directory_prefix(path: str) -> str:
-    """
-    A concrete file (login.php, index.html) is a page, not a crawl fence.
-    Use its parent directory so the rest of the same app stays in scope.
-    A directory path such as /app stays a prefix.
-    """
     raw = path or "/"
     if raw in ("", "/"):
         return "/"
@@ -70,17 +64,12 @@ def same_host(url: str, root: str) -> bool:
     a, b = _host_key(url), _host_key(root)
     return bool(a and b and a == b)
 def under_start_path(url: str, root: str) -> bool:
-    """True when url is on the start path or a subpath.
-    Root path / keeps the whole host.
-    A start URL that points at a file uses that file's directory as the prefix.
-    """
     start = _directory_prefix(path_of(root))
     if start in ("", "/"):
         return True
     path = path_of(url)
     return path == start or path.startswith(start + "/")
 def in_scope(url: str, root: str) -> bool:
-    """Authorised crawl target: same host, and start-path when root is not /."""
     return same_host(url, root) and under_start_path(url, root)
 def is_http_url(url: str) -> bool:
     try:

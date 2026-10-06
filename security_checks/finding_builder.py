@@ -23,7 +23,7 @@ _FALLBACK_RULES = {
         "remediation": "Use parameterised queries and reject unexpected input before it reaches SQL.",
         "cwe_id": "CWE-89",
         "wasc_id": "WASC-19",
-        "owasp": "A03:2021 Injection",
+        "owasp": "A05:2025 Injection",
         "nist": "NIST SP 800-53 SI-10",
         "sans": "CWE Top 25",
     },
@@ -34,7 +34,7 @@ _FALLBACK_RULES = {
         "remediation": "Use parameterised queries on login fields and reject unexpected input.",
         "cwe_id": "CWE-89",
         "wasc_id": "WASC-19",
-        "owasp": "A03:2021 Injection",
+        "owasp": "A05:2025 Injection",
         "nist": "NIST SP 800-53 SI-10",
         "sans": "CWE Top 25",
     },
@@ -45,7 +45,7 @@ _FALLBACK_RULES = {
         "remediation": "Encode output for the relevant HTML context and apply a strict CSP.",
         "cwe_id": "CWE-79",
         "wasc_id": "WASC-08",
-        "owasp": "A03:2021 Injection",
+        "owasp": "A05:2025 Injection",
         "nist": "NIST SP 800-53 SI-10",
         "sans": "CWE Top 25",
     },
@@ -56,7 +56,7 @@ _FALLBACK_RULES = {
         "remediation": "Resolve paths against an allow-list directory and reject .. segments.",
         "cwe_id": "CWE-22",
         "wasc_id": "WASC-33",
-        "owasp": "A01:2021 Broken Access Control",
+        "owasp": "A01:2025 Broken Access Control",
         "nist": "NIST SP 800-53 AC-3",
         "sans": "CWE Top 25",
     },
@@ -66,8 +66,8 @@ _FALLBACK_RULES = {
         "description_template": "A document-database operator in {param} at {location} produced an authenticated or altered response.",
         "remediation": "Do not pass raw request objects into database APIs. Reject keys that begin with $.",
         "cwe_id": "CWE-943",
-        "wasc_id": "WASC-19",
-        "owasp": "A03:2021 Injection",
+        "wasc_id": "WASC-20",
+        "owasp": "A05:2025 Injection",
         "nist": "NIST SP 800-53 SI-10",
         "sans": "Not in CWE Top 25",
     },
@@ -78,7 +78,7 @@ _FALLBACK_RULES = {
         "remediation": "Do not pass user input to a shell. Use a fixed command allow-list and structured arguments.",
         "cwe_id": "CWE-78",
         "wasc_id": "WASC-31",
-        "owasp": "A03:2021 Injection",
+        "owasp": "A05:2025 Injection",
         "nist": "NIST SP 800-53 SI-10",
         "sans": "CWE Top 25",
     },
@@ -117,7 +117,7 @@ def _lookup_rule(plugin_id: str) -> dict:
         "remediation": "Review the endpoint and apply the matching control.",
         "cwe_id": "CWE-693",
         "wasc_id": "WASC-15",
-        "owasp": "A05:2021 Security Misconfiguration",
+        "owasp": "A02:2025 Security Misconfiguration",
         "nist": "NIST SP 800-53 SI-10",
         "sans": "Not in CWE Top 25",
     }
@@ -220,7 +220,6 @@ def build_from_rule(
         context=context,
         vuln_type=vuln_type,
     )
-    finding["owasp_2021"] = str(rule.get("owasp_2021") or rule.get("owasp") or "")
     finding["owasp_2025"] = str(rule.get("owasp_2025") or rule.get("owasp") or "")
     return finding
 def build_passive_rule_finding(

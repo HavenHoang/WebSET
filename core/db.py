@@ -2,6 +2,7 @@ import sqlite3
 import os
 import json
 import hashlib
+import hmac
 from datetime import datetime
 
 DB_PATH = os.path.join(
@@ -19,9 +20,41 @@ def _connect():
     return conn
 
 
+_PBKDF2_ROUNDS = 200_000
+
+
 def _hash_password(password: str) -> str:
-    """Simple SHA-256 hash for prototype (not production-grade)."""
-    return hashlib.sha256((password or "").encode("utf-8")).hexdigest()
+    salt = os.urandom(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        (password or "").encode("utf-8"),
+        salt,
+        _PBKDF2_ROUNDS,
+    )
+    return "pbkdf2_sha256$%d$%s$%s" % (_PBKDF2_ROUNDS, salt.hex(), digest.hex())
+
+
+def _verify_password(password: str, stored: str) -> bool:
+    stored = stored or ""
+    if stored.startswith("pbkdf2_sha256$"):
+        try:
+            _scheme, rounds, salt_hex, digest_hex = stored.split("$", 3)
+            got = hashlib.pbkdf2_hmac(
+                "sha256",
+                (password or "").encode("utf-8"),
+                bytes.fromhex(salt_hex),
+                int(rounds),
+            )
+            expected = bytes.fromhex(digest_hex)
+        except (ValueError, TypeError):
+            return False
+        if len(got) != len(expected):
+            return False
+        return hmac.compare_digest(got, expected)
+    legacy = hashlib.sha256((password or "").encode("utf-8")).hexdigest()
+    if len(stored) != len(legacy):
+        return False
+    return hmac.compare_digest(stored, legacy)
 
 
 def _migrate_findings_columns(cur):
@@ -195,8 +228,8 @@ def register_user(username: str, password: str, display_name: str | None = None)
         raise ValueError("Username is required.")
     if username == ARCHIVE_USERNAME:
         raise ValueError("Reserved username.")
-    if len(password) < 4:
-        raise ValueError("Password must be at least 4 characters.")
+    if len(password) < 8:
+        raise ValueError("Password must be at least 8 characters.")
     display = (display_name or "").strip() or username
     init_db()
     conn = _connect()
@@ -244,7 +277,7 @@ def authenticate_user(username: str, password: str) -> dict | None:
     stored = row["password_hash"] or ""
     if not stored:
         return None
-    if stored != _hash_password(password):
+    if not _verify_password(password, stored):
         return None
     return {
         "id": int(row["id"]),
@@ -349,9 +382,35 @@ def clear_user_history(user_id: int):
         conn.close()
         return
     cur.execute(
-        "UPDATE cases SET user_id = ? WHERE user_id = ?",
-        (archive_id, uid),
+        "SELECT id FROM cases WHERE user_id = ? OR user_id = ?",
+        (uid, archive_id),
     )
+    case_ids = [int(r["id"]) for r in cur.fetchall()]
+    if case_ids:
+        marks = ",".join("?" for _ in case_ids)
+        cur.execute(
+            f"SELECT id FROM scans WHERE case_id IN ({marks})",
+            case_ids,
+        )
+        scan_ids = [int(r["id"]) for r in cur.fetchall()]
+        if scan_ids:
+            smarks = ",".join("?" for _ in scan_ids)
+            cur.execute(
+                f"DELETE FROM findings WHERE scan_id IN ({smarks})",
+                scan_ids,
+            )
+            cur.execute(
+                f"DELETE FROM tech_stacks WHERE scan_id IN ({smarks})",
+                scan_ids,
+            )
+            cur.execute(
+                f"DELETE FROM scans WHERE id IN ({smarks})",
+                scan_ids,
+            )
+        cur.execute(
+            f"DELETE FROM cases WHERE id IN ({marks})",
+            case_ids,
+        )
     conn.commit()
     conn.close()
 
@@ -661,6 +720,46 @@ def update_scan_findings_and_stacks(
     return True
 
 
+
+def _fill_grouped_finding_counts(cur, rows: list) -> None:
+    """Count one finding per group. Same path repeated is not a new finding."""
+    ids = []
+    for row in rows or []:
+        if row.get("scan_id") is None:
+            continue
+        sid = int(row["scan_id"])
+        if sid not in ids:
+            ids.append(sid)
+    if not ids:
+        return
+    marks = ",".join("?" for _ in ids)
+    cur.execute(
+        f"""
+        SELECT
+            f.scan_id AS scan_id,
+            f.severity, f.vulnerability, f.remediation,
+            f.cwe_id, f.owasp_tags, f.nist, f.sans,
+            f.plugin_id, f.vuln_type, f.scan_origin
+        FROM findings f
+        WHERE f.scan_id IN ({marks})
+        """,
+        ids,
+    )
+    scan_rows = {sid: [] for sid in ids}
+    plat_rows = {sid: [] for sid in ids}
+    for r in cur.fetchall():
+        d = _finding_row_to_dict(r)
+        sid = int(d["scan_id"])
+        if str(d.get("scan_origin") or "") == PLATFORM_ORIGIN:
+            plat_rows[sid].append(d)
+        else:
+            scan_rows[sid].append(d)
+    for row in rows:
+        sid = int(row["scan_id"])
+        row["findings_count"] = len(_unique_issues(scan_rows.get(sid, [])))
+        row["platform_findings_count"] = len(_unique_issues(plat_rows.get(sid, [])))
+
+
 def list_scans(limit: int = 50, user_id: int | None = None) -> list:
     init_db()
     conn = _connect()
@@ -733,6 +832,7 @@ def list_scans(limit: int = 50, user_id: int | None = None) -> list:
             (limit,),
         )
     rows = [dict(r) for r in cur.fetchall()]
+    _fill_grouped_finding_counts(cur, rows)
     conn.close()
     return rows
 
@@ -808,6 +908,7 @@ def list_scans_for_case(case_id: int) -> list:
         (int(case_id),),
     )
     rows = [dict(r) for r in cur.fetchall()]
+    _fill_grouped_finding_counts(cur, rows)
     conn.close()
     return rows
 
@@ -970,6 +1071,97 @@ def list_findings_by_origin(scan_origin: str | None = None, limit: int = 100) ->
     return rows
 
 
+def _issue_group_key(f: dict) -> tuple:
+    """Same grouping as Alerts within one scan. A repeat in another scan counts again."""
+    return (
+        str(f.get("scan_id") or ""),
+        str(f.get("vulnerability") or f.get("name") or "").strip().lower(),
+        str(f.get("severity") or "").strip().lower(),
+        str(f.get("cwe_id") or "").strip(),
+        str(f.get("owasp") or "").strip(),
+        str(f.get("nist") or "").strip(),
+        str(f.get("sans") or "").strip(),
+        " ".join(str(f.get("remediation") or "").split()),
+        str(f.get("vuln_type") or "").strip().lower(),
+        str(f.get("plugin_id") or "").strip(),
+    )
+
+
+def _unique_issues(rows: list) -> list:
+    seen = set()
+    out = []
+    for f in rows or []:
+        key = _issue_group_key(f)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(f)
+    return out
+
+
+def _severity_bucket(severity) -> str:
+    sev = str(severity or "Low")
+    if sev not in ("High", "Medium", "Low"):
+        return "Low"
+    return sev
+
+
+def _owasp_count_keys(f: dict) -> list:
+    keys = []
+    tags = f.get("owasp_tags") or []
+    if isinstance(tags, str):
+        try:
+            parsed = json.loads(tags)
+            tags = parsed if isinstance(parsed, list) else [str(parsed)]
+        except Exception:
+            tags = [t.strip() for t in tags.split(",") if t.strip()]
+    for t in tags:
+        key = str(t).strip()
+        if key.startswith("OWASP-"):
+            key = key.replace("OWASP-", "")
+        if key.startswith("A0") or key.startswith("OWASP"):
+            if key not in keys:
+                keys.append(key)
+    if not keys:
+        key = str(f.get("owasp") or "").strip()
+        if key.startswith("OWASP-"):
+            key = key.replace("OWASP-", "")
+        if key.startswith("A0") or key.startswith("OWASP"):
+            keys.append(key)
+    return keys
+
+
+def _count_issue_field(issues: list, field: str) -> dict:
+    out = {}
+    for f in issues or []:
+        key = str(f.get(field) or "").strip()
+        if not key:
+            continue
+        out[key] = out.get(key, 0) + 1
+    return out
+
+
+def _load_start_scan_findings(cur, user_id: int | None = None) -> list:
+    sql = """
+        SELECT
+            f.scan_id AS scan_id,
+            f.severity, f.vulnerability, f.remediation,
+            f.cwe_id, f.owasp_tags, f.nist, f.sans,
+            f.plugin_id, f.vuln_type, f.scan_origin,
+            s.scan_type AS scan_type
+        FROM findings f
+        JOIN scans s ON s.id = f.scan_id
+        JOIN cases c ON c.id = s.case_id
+        WHERE IFNULL(f.scan_origin, '') != ?
+    """
+    params = [PLATFORM_ORIGIN]
+    if user_id is not None:
+        sql += " AND c.user_id = ?"
+        params.append(user_id)
+    cur.execute(sql, params)
+    return [_finding_row_to_dict(r) for r in cur.fetchall()]
+
+
 def get_platform_note_counts(user_id: int | None = None) -> list:
     """Counts of Get Stack platform notes for the dashboard panel."""
     init_db()
@@ -1024,15 +1216,6 @@ def get_dashboard_stats(user_id: int | None = None) -> dict:
         scans = cur.fetchone()["n"]
         cur.execute(
             """
-            SELECT COUNT(*) AS n FROM findings f
-            JOIN scans s ON s.id = f.scan_id
-            JOIN cases c ON c.id = s.case_id WHERE c.user_id = ?
-            """,
-            (user_id,),
-        )
-        findings = cur.fetchone()["n"]
-        cur.execute(
-            """
             SELECT COUNT(DISTINCT t.name) AS n FROM tech_stacks t
             JOIN scans s ON s.id = t.scan_id
             JOIN cases c ON c.id = s.case_id WHERE c.user_id = ?
@@ -1045,97 +1228,23 @@ def get_dashboard_stats(user_id: int | None = None) -> dict:
         cases = cur.fetchone()["n"]
         cur.execute("SELECT COUNT(*) AS n FROM scans")
         scans = cur.fetchone()["n"]
-        cur.execute("SELECT COUNT(*) AS n FROM findings")
-        findings = cur.fetchone()["n"]
         cur.execute("SELECT COUNT(DISTINCT name) AS n FROM tech_stacks")
         technologies = cur.fetchone()["n"]
-    if user_id is not None:
-        cur.execute(
-            """
-            SELECT f.severity, COUNT(*) AS n FROM findings f
-            JOIN scans s ON s.id = f.scan_id
-            JOIN cases c ON c.id = s.case_id
-            WHERE c.user_id = ?
-            GROUP BY f.severity
-            """,
-            (user_id,),
-        )
-    else:
-        cur.execute("SELECT severity, COUNT(*) AS n FROM findings GROUP BY severity")
-    severity = {r["severity"]: r["n"] for r in cur.fetchall()}
-    high = int(severity.get("High", 0) or 0)
-    medium = int(severity.get("Medium", 0) or 0)
-    low = int(severity.get("Low", 0) or 0)
+    issue_rows = _load_start_scan_findings(cur, user_id)
+    issues = _unique_issues(issue_rows)
+    findings = len(issues)
+    severity = {"High": 0, "Medium": 0, "Low": 0}
     owasp_counts = {}
-    if user_id is not None:
-        cur.execute(
-            """
-            SELECT f.owasp_tags FROM findings f
-            JOIN scans s ON s.id = f.scan_id
-            JOIN cases c ON c.id = s.case_id
-            WHERE c.user_id = ?
-              AND IFNULL(f.scan_origin, '') != ?
-              AND f.owasp_tags IS NOT NULL AND f.owasp_tags != ''
-              AND f.owasp_tags != '[]'
-            """,
-            (user_id, PLATFORM_ORIGIN),
-        )
-    else:
-        cur.execute(
-            """
-            SELECT owasp_tags FROM findings
-            WHERE IFNULL(scan_origin, '') != ?
-              AND owasp_tags IS NOT NULL AND owasp_tags != ''
-              AND owasp_tags != '[]'
-            """,
-            (PLATFORM_ORIGIN,),
-        )
-    for r in cur.fetchall():
-        raw = r["owasp_tags"]
-        try:
-            parsed = json.loads(raw)
-            tags = parsed if isinstance(parsed, list) else [str(parsed)]
-        except Exception:
-            tags = [t.strip() for t in str(raw).split(",") if t.strip()]
-        for t in tags:
-            key = str(t).strip()
-            if key.startswith("OWASP-"):
-                key = key.replace("OWASP-", "")
-            if key.startswith("A0") or key.startswith("OWASP"):
-                owasp_counts[key] = owasp_counts.get(key, 0) + 1
-
-    def _count_col(col: str) -> dict:
-        out = {}
-        if user_id is not None:
-            cur.execute(
-                f"""
-                SELECT f.{col} AS k, COUNT(*) AS n FROM findings f
-                JOIN scans s ON s.id = f.scan_id
-                JOIN cases c ON c.id = s.case_id
-                WHERE c.user_id = ?
-                  AND IFNULL(f.scan_origin, '') != ?
-                  AND f.{col} IS NOT NULL AND f.{col} != ''
-                GROUP BY f.{col}
-                """,
-                (user_id, PLATFORM_ORIGIN),
-            )
-        else:
-            cur.execute(
-                f"""
-                SELECT {col} AS k, COUNT(*) AS n FROM findings
-                WHERE IFNULL(scan_origin, '') != ?
-                  AND {col} IS NOT NULL AND {col} != ''
-                GROUP BY {col}
-                """,
-                (PLATFORM_ORIGIN,),
-            )
-        for r in cur.fetchall():
-            out[str(r["k"])] = int(r["n"])
-        return out
-
-    cwe_counts = _count_col("cwe_id")
-    nist_counts = _count_col("nist")
-    sans_counts = _count_col("sans")
+    for f in issues:
+        severity[_severity_bucket(f.get("severity"))] += 1
+        for key in _owasp_count_keys(f):
+            owasp_counts[key] = owasp_counts.get(key, 0) + 1
+    high = severity["High"]
+    medium = severity["Medium"]
+    low = severity["Low"]
+    cwe_counts = _count_issue_field(issues, "cwe_id")
+    nist_counts = _count_issue_field(issues, "nist")
+    sans_counts = _count_issue_field(issues, "sans")
     if user_id is not None:
         cur.execute(
             """
@@ -1156,31 +1265,15 @@ def get_dashboard_stats(user_id: int | None = None) -> dict:
             """
         )
     top_tech = [{"name": r["name"], "count": r["n"]} for r in cur.fetchall()]
-    if user_id is not None:
-        cur.execute(
-            """
-            SELECT f.severity, COUNT(*) AS n FROM findings f
-            JOIN scans s ON s.id = f.scan_id
-            JOIN cases c ON c.id = s.case_id
-            WHERE c.user_id = ?
-              AND IFNULL(f.scan_origin, '') != ?
-              AND (f.scan_origin = 'Static' OR s.scan_type = 'Static')
-            GROUP BY f.severity
-            """,
-            (user_id, PLATFORM_ORIGIN),
-        )
-    else:
-        cur.execute(
-            """
-            SELECT f.severity, COUNT(*) AS n FROM findings f
-            JOIN scans s ON s.id = f.scan_id
-            WHERE IFNULL(f.scan_origin, '') != ?
-              AND (f.scan_origin = 'Static' OR s.scan_type = 'Static')
-            GROUP BY f.severity
-            """,
-            (PLATFORM_ORIGIN,),
-        )
-    static_severity = {r["severity"]: r["n"] for r in cur.fetchall()}
+    static_rows = [
+        f for f in issue_rows
+        if str(f.get("scan_origin") or "") == "Static"
+        or str(f.get("scan_type") or "") == "Static"
+    ]
+    static_severity = {}
+    for f in _unique_issues(static_rows):
+        sev = _severity_bucket(f.get("severity"))
+        static_severity[sev] = static_severity.get(sev, 0) + 1
     if user_id is not None:
         cur.execute(
             """
@@ -1283,10 +1376,7 @@ def get_findings_per_scan(limit: int = 8) -> list:
         SELECT
             s.id AS scan_id,
             c.name AS case_name,
-            s.created_at AS created_at,
-            (SELECT COUNT(*) FROM findings f WHERE f.scan_id = s.id) AS total,
-            (SELECT COUNT(*) FROM findings f
-             WHERE f.scan_id = s.id AND f.severity = 'High') AS high_count
+            s.created_at AS created_at
         FROM scans s
         JOIN cases c ON c.id = s.case_id
         ORDER BY s.id ASC
@@ -1295,7 +1385,32 @@ def get_findings_per_scan(limit: int = 8) -> list:
         (limit,),
     )
     rows = [dict(r) for r in cur.fetchall()]
+    ids = [int(r["scan_id"]) for r in rows]
+    grouped = {sid: [] for sid in ids}
+    if ids:
+        marks = ",".join("?" for _ in ids)
+        cur.execute(
+            f"""
+            SELECT
+                f.scan_id AS scan_id,
+                f.severity, f.vulnerability, f.remediation,
+                f.cwe_id, f.owasp_tags, f.nist, f.sans,
+                f.plugin_id, f.vuln_type, f.scan_origin
+            FROM findings f
+            WHERE f.scan_id IN ({marks})
+              AND IFNULL(f.scan_origin, '') != ?
+            """,
+            (*ids, PLATFORM_ORIGIN),
+        )
+        for r in cur.fetchall():
+            grouped[int(r["scan_id"])].append(_finding_row_to_dict(r))
     conn.close()
+    for row in rows:
+        issues = _unique_issues(grouped.get(int(row["scan_id"]), []))
+        row["total"] = len(issues)
+        row["high_count"] = sum(
+            1 for f in issues if str(f.get("severity") or "") == "High"
+        )
     return rows
 
 

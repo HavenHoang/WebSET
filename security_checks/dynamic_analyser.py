@@ -19,7 +19,6 @@ _ERROR_CODES = {
 _UNUSABLE_STATUSES = frozenset({0, 502, 503, 504})
 _MAX_EXTRA_TARGETS = 24
 _SCAN_BUDGET_SEC = 25.0
-_SLOW_FETCH_SEC = 4.0
 _FS_PREFIXES = (
     "/users/",
     "/home/",
@@ -616,7 +615,6 @@ def _analyse_dynamic_body(
     timeout: float | None = None,
     on_progress=None,
 ) -> list | dict:
-    started = time.time()
     target = _drop_fragment(
         normalise_url(url)
     )
@@ -759,7 +757,6 @@ def _analyse_dynamic_body(
     _publish_session_cookies(
         session_cookies
     )
-    slow_start = (time.time() - started) >= _SLOW_FETCH_SEC
     findings = list(
         run_passive_checks(ctx)
         or []
@@ -790,16 +787,15 @@ def _analyse_dynamic_body(
         visited.add(
             landed.rstrip("/")
         )
-    queue = []
-    if not slow_start:
-        queue = _discover_urls(
-            target,
-            artefact,
-        )
-        for home in _home_urls(target):
-            if home.rstrip("/") not in visited:
-                queue.append(home)
-        queue.sort(key=_priority)
+    queue = _discover_urls(
+        target,
+        artefact,
+    )
+    for home in _home_urls(target):
+        if home.rstrip("/") not in visited:
+            queue.append(home)
+    queue.sort(key=_priority)
+    crawl_started = time.time()
     _notify_progress(
         on_progress,
         1,
@@ -810,7 +806,7 @@ def _analyse_dynamic_body(
         queue
         and len(visited)
         <= _MAX_EXTRA_TARGETS
-        and _budget_left(started)
+        and _budget_left(crawl_started)
     ):
         extra_url = queue.pop(0)
         key = extra_url.rstrip("/")
@@ -868,7 +864,7 @@ def _analyse_dynamic_body(
     _publish_session_cookies(
         session_cookies
     )
-    if not slow_start and _budget_left(started):
+    if _budget_left(crawl_started):
         _notify_progress(
             on_progress,
             len(visited),

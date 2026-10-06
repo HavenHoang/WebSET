@@ -192,9 +192,7 @@ def _std_tip(f: dict) -> str:
     parts = [
         f"CWE: {f.get('cwe_id') or f.get('cweId') or '—'}",
         f"WASC: {f.get('wasc_id') or f.get('wascId') or '—'}",
-        f"OWASP: {f.get('owasp') or '—'}",
-        f"OWASP 2021: {f.get('owasp_2021') or '—'}",
-        f"OWASP 2025: {f.get('owasp_2025') or '—'}",
+        f"OWASP: {f.get('owasp') or f.get('owasp_2025') or '—'}",
         f"NIST: {f.get('nist') or f.get('nist_id') or '—'}",
         f"SANS: {f.get('sans') or f.get('sans_id') or '—'}",
         f"Plugin: {f.get('plugin_id') or f.get('pluginId') or '—'}",
@@ -238,17 +236,9 @@ def _standards_cell(f: dict) -> str:
     cwe = str(f.get("cwe_id") or f.get("cweId") or "—")
     nist = str(f.get("nist") or f.get("nist_id") or "—")
     sans = str(f.get("sans") or f.get("sans_id") or "—")
-    owasp = str(f.get("owasp") or "").strip()
-    owasp_2021 = str(f.get("owasp_2021") or "").strip()
-    owasp_2025 = str(f.get("owasp_2025") or "").strip()
+    owasp = str(f.get("owasp") or f.get("owasp_2025") or "—").strip()
     lines = [f"CWE: {cwe}"]
-    if owasp_2021 and owasp_2025 and owasp_2021 != owasp_2025:
-        lines.append(f"OWASP 2021: {owasp_2021}")
-        lines.append(f"OWASP 2025: {owasp_2025}")
-    elif owasp:
-        lines.append(f"OWASP: {owasp}")
-    elif owasp_2021:
-        lines.append(f"OWASP: {owasp_2021}")
+    lines.append(f"OWASP: {owasp}")
     lines.append(f"NIST: {nist}")
     lines.append(f"SANS: {sans}")
     return "\n".join(lines)

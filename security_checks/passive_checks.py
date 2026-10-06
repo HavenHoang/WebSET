@@ -439,7 +439,6 @@ def check_csrf_forms(ctx: HttpContext) -> list[dict]:
         break
     return findings
 def check_weak_session_id(ctx: HttpContext) -> list[dict]:
-    """Short or numeric-only session cookies are guessable."""
     findings = []
     for raw in ctx.set_cookies:
         cookie = parse_set_cookie(raw)
@@ -485,7 +484,6 @@ _AUTOCOMPLETE_RE = re.compile(r"""autocomplete\s*=\s*['"]([^'"]+)['"]""", re.I)
 
 
 def check_password_autocomplete(ctx: HttpContext) -> list[dict]:
-    """Hygiene: password fields that still allow the browser to store the value."""
     body = ctx.body or ""
     if "password" not in body.lower() or "<input" not in body.lower():
         return []
