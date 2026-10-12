@@ -712,13 +712,15 @@ RULES: dict[str, dict] = {
         "nist": "NIST SP 800-53 Rev. 5 SI-10",
         "sans": "CWE Top 25 (2025) - #1",
         "description_template": (
-            "An HTML sink such as innerHTML, document.write or "
-            "dangerouslySetInnerHTML was found in {location}. Unencoded data "
-            "written here becomes a cross-site scripting path."
+            "An HTML sink was found in {location}. This includes JavaScript "
+            "sinks such as innerHTML, document.write or dangerouslySetInnerHTML, "
+            "and PHP output that writes $_GET, $_POST or $_REQUEST into the "
+            "page. Unencoded data written here becomes a cross-site scripting path."
         ),
         "remediation": (
-            "Use textContent or the framework's encoding helpers. Avoid raw "
-            "HTML insertion unless the content is already sanitised."
+            "Use textContent or the framework's encoding helpers. In PHP, "
+            "pass user input through htmlspecialchars before echo or print. "
+            "Avoid raw HTML insertion unless the content is already sanitised."
         ),
     },
     "static-sql-concat": {
@@ -1059,8 +1061,6 @@ RULES: dict[str, dict] = {
     },
 }
 
-# Optional dual-year / multi-control fields. Existing owasp/nist/sans stay
-# required so stored findings and STRICT_VALIDATION do not change.
 RULE_KEYS = (
     "vulnerability",
     "severity",
@@ -1073,8 +1073,6 @@ RULE_KEYS = (
     "remediation",
 )
 
-# Extra fields copied onto each rule. Displayed OWASP is Top 10:2025.
-# nist and sans here replace the shorter values on the rule.
 _STANDARD_ENRICHMENT = {
     "header-xfo": {
         "owasp_2025": "A02:2025 Security Misconfiguration",

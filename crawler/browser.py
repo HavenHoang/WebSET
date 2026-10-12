@@ -1,4 +1,3 @@
-"""Optional JS render path. Keep headless and short-lived."""
 from __future__ import annotations
 import time
 from urllib.parse import urljoin, urlparse
@@ -30,10 +29,6 @@ def _cookie_record(cookie: dict) -> dict:
         "raw": f"{name}={value}",
     }
 def _apply_cookies(driver, url: str, cookies: list | None) -> None:
-    """
-    Selenium can only add cookies for the current origin.
-    Open the origin first, then attach caller-supplied cookies.
-    """
     if not cookies:
         return
     origin = _origin(url)
@@ -77,7 +72,6 @@ def _logged_in(html: str) -> bool:
     low = (html or "").lower()
     return "logout" in low or "log out" in low
 def _dom_hrefs(driver) -> list[str]:
-    """href + location.hash from the rendered page (SPA routes included)."""
     try:
         raw = driver.execute_script(
             """
@@ -213,7 +207,6 @@ def fetch_with_selenium(
         "--disable-notifications",
     ):
         opts.add_argument(a)
-    # eager = DOM ready, do not wait for every third-party script (ads, trackers)
     opts.page_load_strategy = "eager"
     driver = None
     t0 = time.time()

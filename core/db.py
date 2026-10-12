@@ -2,6 +2,7 @@ import sqlite3
 import os
 import json
 import hashlib
+import hmac
 from datetime import datetime
 
 DB_PATH = os.path.join(
@@ -19,9 +20,41 @@ def _connect():
     return conn
 
 
+_PBKDF2_ROUNDS = 200_000
+
+
 def _hash_password(password: str) -> str:
-    """Simple SHA-256 hash for prototype (not production-grade)."""
-    return hashlib.sha256((password or "").encode("utf-8")).hexdigest()
+    salt = os.urandom(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        (password or "").encode("utf-8"),
+        salt,
+        _PBKDF2_ROUNDS,
+    )
+    return "pbkdf2_sha256$%d$%s$%s" % (_PBKDF2_ROUNDS, salt.hex(), digest.hex())
+
+
+def _verify_password(password: str, stored: str) -> bool:
+    stored = stored or ""
+    if stored.startswith("pbkdf2_sha256$"):
+        try:
+            _scheme, rounds, salt_hex, digest_hex = stored.split("$", 3)
+            got = hashlib.pbkdf2_hmac(
+                "sha256",
+                (password or "").encode("utf-8"),
+                bytes.fromhex(salt_hex),
+                int(rounds),
+            )
+            expected = bytes.fromhex(digest_hex)
+        except (ValueError, TypeError):
+            return False
+        if len(got) != len(expected):
+            return False
+        return hmac.compare_digest(got, expected)
+    legacy = hashlib.sha256((password or "").encode("utf-8")).hexdigest()
+    if len(stored) != len(legacy):
+        return False
+    return hmac.compare_digest(stored, legacy)
 
 
 def _migrate_findings_columns(cur):
@@ -195,8 +228,8 @@ def register_user(username: str, password: str, display_name: str | None = None)
         raise ValueError("Username is required.")
     if username == ARCHIVE_USERNAME:
         raise ValueError("Reserved username.")
-    if len(password) < 4:
-        raise ValueError("Password must be at least 4 characters.")
+    if len(password) < 8:
+        raise ValueError("Password must be at least 8 characters.")
     display = (display_name or "").strip() or username
     init_db()
     conn = _connect()
@@ -244,7 +277,7 @@ def authenticate_user(username: str, password: str) -> dict | None:
     stored = row["password_hash"] or ""
     if not stored:
         return None
-    if stored != _hash_password(password):
+    if not _verify_password(password, stored):
         return None
     return {
         "id": int(row["id"]),
@@ -349,9 +382,35 @@ def clear_user_history(user_id: int):
         conn.close()
         return
     cur.execute(
-        "UPDATE cases SET user_id = ? WHERE user_id = ?",
-        (archive_id, uid),
+        "SELECT id FROM cases WHERE user_id = ? OR user_id = ?",
+        (uid, archive_id),
     )
+    case_ids = [int(r["id"]) for r in cur.fetchall()]
+    if case_ids:
+        marks = ",".join("?" for _ in case_ids)
+        cur.execute(
+            f"SELECT id FROM scans WHERE case_id IN ({marks})",
+            case_ids,
+        )
+        scan_ids = [int(r["id"]) for r in cur.fetchall()]
+        if scan_ids:
+            smarks = ",".join("?" for _ in scan_ids)
+            cur.execute(
+                f"DELETE FROM findings WHERE scan_id IN ({smarks})",
+                scan_ids,
+            )
+            cur.execute(
+                f"DELETE FROM tech_stacks WHERE scan_id IN ({smarks})",
+                scan_ids,
+            )
+            cur.execute(
+                f"DELETE FROM scans WHERE id IN ({smarks})",
+                scan_ids,
+            )
+        cur.execute(
+            f"DELETE FROM cases WHERE id IN ({marks})",
+            case_ids,
+        )
     conn.commit()
     conn.close()
 
@@ -661,6 +720,46 @@ def update_scan_findings_and_stacks(
     return True
 
 
+
+def _fill_grouped_finding_counts(cur, rows: list) -> None:
+    """Count one finding per group. Same path repeated is not a new finding."""
+    ids = []
+    for row in rows or []:
+        if row.get("scan_id") is None:
+            continue
+        sid = int(row["scan_id"])
+        if sid not in ids:
+            ids.append(sid)
+    if not ids:
+        return
+    marks = ",".join("?" for _ in ids)
+    cur.execute(
+        f"""
+        SELECT
+            f.scan_id AS scan_id,
+            f.severity, f.vulnerability, f.remediation,
+            f.cwe_id, f.owasp_tags, f.nist, f.sans,
+            f.plugin_id, f.vuln_type, f.scan_origin
+        FROM findings f
+        WHERE f.scan_id IN ({marks})
+        """,
+        ids,
+    )
+    scan_rows = {sid: [] for sid in ids}
+    plat_rows = {sid: [] for sid in ids}
+    for r in cur.fetchall():
+        d = _finding_row_to_dict(r)
+        sid = int(d["scan_id"])
+        if str(d.get("scan_origin") or "") == PLATFORM_ORIGIN:
+            plat_rows[sid].append(d)
+        else:
+            scan_rows[sid].append(d)
+    for row in rows:
+        sid = int(row["scan_id"])
+        row["findings_count"] = len(_unique_issues(scan_rows.get(sid, [])))
+        row["platform_findings_count"] = len(_unique_issues(plat_rows.get(sid, [])))
+
+
 def list_scans(limit: int = 50, user_id: int | None = None) -> list:
     init_db()
     conn = _connect()
@@ -733,6 +832,7 @@ def list_scans(limit: int = 50, user_id: int | None = None) -> list:
             (limit,),
         )
     rows = [dict(r) for r in cur.fetchall()]
+    _fill_grouped_finding_counts(cur, rows)
     conn.close()
     return rows
 
@@ -808,6 +908,7 @@ def list_scans_for_case(case_id: int) -> list:
         (int(case_id),),
     )
     rows = [dict(r) for r in cur.fetchall()]
+    _fill_grouped_finding_counts(cur, rows)
     conn.close()
     return rows
 

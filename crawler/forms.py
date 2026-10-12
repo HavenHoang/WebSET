@@ -1,19 +1,3 @@
-"""
-Form & parameter extraction (Start Scan URL).
-Produces the request-target shape Member 1 uses to know where inputs live:
-    {
-      "url": "https://host/login",
-      "method": "POST",
-      "parameters": [
-        {"name": "username", "type": "text",     "location": "body"},
-        {"name": "password", "type": "password", "location": "body"},
-        {"name": "csrf_token", "type": "hidden", "location": "body"}
-      ],
-      "technologies": ["PHP", "Apache"]
-    }
-Uses the standard-library HTML parser (no extra dependency). Member 2 only
-extracts inputs -- it does NOT submit forms or send payloads (that is Member 3).
-"""
 from __future__ import annotations
 from html.parser import HTMLParser
 from urllib.parse import parse_qsl, urljoin, urlparse, urlunparse
@@ -84,7 +68,6 @@ def _strip_query_fragment(url: str) -> str:
     p = urlparse(url or "")
     return urlunparse((p.scheme, p.netloc, p.path or "/", "", "", ""))
 def extract_forms(page: dict, base_url: str | None = None) -> list:
-    """Return one request-target dict per <form> found in the page body."""
     if isinstance(page, str):
         page = {"body": page, "url": base_url or ""}
     page = page or {}

@@ -1,11 +1,3 @@
-"""Response analysis for Active Test exploit chains.
-analyse_* / analyse_for_vuln_type  — one response
-summarise_detections               — all checks for one finding
-Verdicts:
-  CONFIRMED      A chain exploit step matched (auth bypass, raw XSS PoC, …)
-  LIKELY         Strong signal, not enough to confirm the exploit step
-  NOT CONFIRMED  No useful proof from this suite
-"""
 from __future__ import annotations
 import html
 import json
@@ -53,8 +45,6 @@ _SQL_STACK_RE = re.compile(
     r"\bat\s+Database\b|SequelizeDatabaseError)",
     re.I,
 )
-# Engine name only counts next to a real driver/ORM fault — not "WARNING" banners
-# or "web server and database" copy.
 _SQL_ENGINE_NEAR_ERROR = re.compile(
     r"(mysql|mysqli|mariadb|postgres(?:ql)?|sqlite3?|odbc|jdbc|prisma|knex|sequelize)"
     r".{0,32}(sqlstate|exception|syntax error|query failed|operationalerror|error in your sql)|"
@@ -426,7 +416,6 @@ def _window_around(body: str, needle: str, radius: int = 160, keep_markup: bool 
         tag = body.rfind("<", start, idx)
         if tag >= start:
             start = tag
-    # Prefer the nearest block/script/form open so a page <h1> is not the first line.
     for open_tag in ("<div", "<script", "<pre", "<code", "<textarea", "<form"):
         pos = body.lower().rfind(open_tag, max(0, idx - 400), idx)
         if pos >= 0:
@@ -500,7 +489,6 @@ def _evidence_snippet(body: str, needles: list[str] | tuple[str, ...] = ()) -> s
 def _sql_error(body: str) -> bool:
     text = body or ""
     low = text.lower()
-    # Help/setup pages quote example DB errors. Those are not a live probe hit.
     if _DOCUMENTED_SQL_RE.search(text):
         live = (
             "you have an error in your sql syntax",
@@ -533,7 +521,6 @@ def _auth_success(status_code: int, body: str) -> bool:
     if int(status_code or 0) not in (200, 201):
         return False
     text = body or ""
-    # A SQL / ORM fault is a broken query, not a successful login.
     if _sql_error(text):
         return False
     try:
@@ -681,8 +668,6 @@ def analyse_sqli(marker: str, body: str, status_code: int, expect: str = "") -> 
     body = _plain(body)
     db_error = _sql_error(body)
     fs_err = _fs_error(body)
-    # Include / open-stream faults are not SQL errors. Page chrome that
-    # mentions an engine name must not confirm SQLi by itself.
     if fs_err and not db_error:
         db_error = False
     auth = _auth_success(status_code, body)
@@ -1023,8 +1008,8 @@ def analyse_nosqli(marker: str, body: str, status: int, expect: str = "") -> dic
             "encoded": False,
             "db_error_signal": False,
             "auth_success": False,
-            "confirmation": "LIKELY",
-            "conclusion": "LIKELY — response echoed the operator, no extra records",
+            "confirmation": "NOT CONFIRMED",
+            "conclusion": "NOT CONFIRMED — response echoed the operator, no extra records",
             "detail": "HTTP success with the probe reflected as the identifier is not a data leak.",
             "expect": expect,
             "evidence": (text[:240] if text else f"HTTP {status}"),
@@ -1149,7 +1134,7 @@ def analyse_xxe(marker: str, body: str, status: int, expect: str = "") -> dict:
     if int(status or 0) in (200, 410, 500) and any(h in low for h in (
         "b2b customer complaints", "deprecated for security",
     )):
-        conf = "CONFIRMED" if any(h in text for h in file_hits) or "root:x:" in low else "LIKELY"
+        conf = "CONFIRMED" if any(h in text for h in file_hits) or "root:x:" in low else "NOT CONFIRMED"
         return {
             "found_in_body": True,
             "encoded": False,
@@ -1159,9 +1144,13 @@ def analyse_xxe(marker: str, body: str, status: int, expect: str = "") -> dict:
             "conclusion": (
                 "CONFIRMED — XXE file disclosure"
                 if conf == "CONFIRMED"
-                else "LIKELY — deprecated XML upload parsed an entity payload"
+                else "NOT CONFIRMED — deprecation response without a local file"
             ),
-            "detail": "The upload endpoint parsed XML and returned a deprecation fault.",
+            "detail": (
+                "Entity expansion returned a local file signature."
+                if conf == "CONFIRMED"
+                else "A deprecation fault without local file content is not entity expansion."
+            ),
             "expect": expect,
             "evidence": _xxe_evidence(text),
         }

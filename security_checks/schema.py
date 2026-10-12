@@ -1,17 +1,9 @@
 from __future__ import annotations
 
-# ---------------------------------------------------------------------------
-# Vocabulary
-# ---------------------------------------------------------------------------
-
-#: Allowed severity values. Ordered most to least serious.
 SEVERITY_LEVELS = ("Critical", "High", "Medium", "Low", "Informational")
 
-#: Where a result came from. Platform is Get Stack guidance, never a scan
-#: finding, and is stored separately from Dynamic/Static results.
 SCAN_ORIGINS = ("Dynamic", "Static", "Platform")
 
-#: Vulnerability types that may expose the Active Test button in Alerts.
 ACTIVE_VULN_TYPES = frozenset({
     "xss",
     "sqli",
@@ -22,14 +14,8 @@ ACTIVE_VULN_TYPES = frozenset({
     "idor",
 })
 
-#: Vulnerability type used by passive findings (headers, cookies, transport).
 PASSIVE_VULN_TYPE = "generic"
 
-# ---------------------------------------------------------------------------
-# Field groups
-# ---------------------------------------------------------------------------
-
-#: Keys every Start Scan finding must carry with a non-empty value.
 REQUIRED_START_SCAN_KEYS = (
     "severity",
     "vulnerability",
@@ -39,10 +25,8 @@ REQUIRED_START_SCAN_KEYS = (
     "scan_origin",
 )
 
-#: Standards metadata. Start Scan findings only - never Platform notes.
 STANDARDS_KEYS = ("cwe_id", "wasc_id", "owasp", "nist", "sans")
 
-#: Context Member 3's payload module needs to build one verification request.
 ACTIVE_TEST_KEYS = (
     "url",
     "endpoint",
@@ -53,7 +37,6 @@ ACTIVE_TEST_KEYS = (
     "vuln_type",
 )
 
-#: Keys a Platform note must carry. Note the absence of STANDARDS_KEYS.
 REQUIRED_PLATFORM_KEYS = (
     "severity",
     "vulnerability",
@@ -62,29 +45,10 @@ REQUIRED_PLATFORM_KEYS = (
     "remediation",
 )
 
-# ---------------------------------------------------------------------------
-# Builder behaviour
-# ---------------------------------------------------------------------------
-
-#: When True, the builders raise on an invalid finding instead of returning
-#: it with a problem list attached. Keep True during development so mistakes
-#: surface immediately; the team may flip it to False before the final demo if
-#: a crash is worse than one incomplete row in Alerts.
 STRICT_VALIDATION = True
-
-# ---------------------------------------------------------------------------
-# Active Test eligibility
-# ---------------------------------------------------------------------------
 
 
 def is_active_testable(finding: dict) -> bool:
-    """Whether Alerts should offer an Active Test action for this finding.
-
-    A finding qualifies only when it is an injection-style result carrying
-    enough context to build exactly one verification request. Passive results
-    such as a missing header describe the response itself and have nothing to
-    replay, so they never qualify.
-    """
     if not finding:
         return False
     if str(finding.get("scan_origin") or "") == "Platform":
@@ -106,17 +70,7 @@ def is_active_testable(finding: dict) -> bool:
     return True
 
 
-# ---------------------------------------------------------------------------
-# Validation
-# ---------------------------------------------------------------------------
-
-
 def validate_start_scan_finding(f: dict) -> list[str]:
-    """Return a list of problems with a Start Scan finding.
-
-    An empty list means the finding satisfies the contract and is safe to hand
-    to the backend.
-    """
     if not isinstance(f, dict):
         return ["finding is not a dict"]
     problems: list[str] = []
@@ -143,12 +97,6 @@ def validate_start_scan_finding(f: dict) -> list[str]:
 
 
 def validate_platform_note(note: dict) -> list[str]:
-    """Return a list of problems with a Get Stack platform note.
-
-    Platform notes are hardening guidance derived from detected technology,
-    not confirmed vulnerabilities, so they must not carry standards metadata
-    and must not look like something Active Test can replay.
-    """
     if not isinstance(note, dict):
         return ["note is not a dict"]
     problems: list[str] = []
@@ -166,13 +114,7 @@ def validate_platform_note(note: dict) -> list[str]:
     return problems
 
 
-# ---------------------------------------------------------------------------
-# Small helpers
-# ---------------------------------------------------------------------------
-
-
 def severity_rank(severity: str) -> int:
-    """Sort key for severity, 0 = most serious. Unknown values sort last."""
     try:
         return SEVERITY_LEVELS.index(str(severity).strip())
     except ValueError:
@@ -180,7 +122,6 @@ def severity_rank(severity: str) -> int:
 
 
 def sort_findings(findings: list[dict]) -> list[dict]:
-    """Return findings ordered by severity, then name."""
     def key(f: dict):
         return (
             severity_rank(f.get("severity", "")),

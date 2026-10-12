@@ -1,17 +1,4 @@
 class SharedState:
-    """
-    Session state for WebSET GUI.
-    findings        → Start Scan only (may include CWE/OWASP/NIST/SANS).
-    stack_findings  → Get Stack platform notes only (guidance; no standards mapping).
-    tech_stacks     → Detected technologies from Get Stack.
-    has_scan_data()  → True only after Start Scan (_start_scan_active).
-    has_stack_data() → True if tech_stacks or stack_findings present.
-    Get Stack must NEVER set _start_scan_active.
-    active_test_finding → optional hand-off from Alerts → Payload
-      (one finding target for a single-request Active Test).
-    scan_cookies → session cookies captured during Start Scan / fetch
-      so Active Test can reuse the same authenticated context.
-    """
     current_url = None
     findings = []
     stack_findings = []
@@ -22,11 +9,8 @@ class SharedState:
     scan_id = None
     current_user_id = None
     current_user_name = None
-    # Start Scan pipeline only (Get Stack must NOT flip this)
     _start_scan_active = False
-    # Alerts → Payload Active Test hand-off (not persisted)
     active_test_finding = None
-    # HTTP cookies from the last fetch/scan (dict name→value). Not persisted.
     scan_cookies = None
     @classmethod
     def clear(cls):
@@ -52,7 +36,10 @@ class SharedState:
         return cls.current_user_id is not None
     @classmethod
     def set_user(cls, user_id: int, display_name: str):
-        cls.current_user_id = int(user_id)
+        uid = int(user_id)
+        if cls.current_user_id != uid:
+            cls.clear()
+        cls.current_user_id = uid
         cls.current_user_name = display_name or f"User {user_id}"
     @classmethod
     def _as_cookie_dict(cls, cookies) -> dict:
@@ -124,11 +111,8 @@ class SharedState:
             cls.case_id = case_id
         if scan_id is not None:
             cls.scan_id = scan_id
-        # intentionally do NOT set _start_scan_active
-        # intentionally do NOT clear active_test_finding (Start Scan finding may still be valid)
     @classmethod
     def set_scan_cookies(cls, cookies, merge: bool = True):
-        """Store cookies from crawler/fetch for later Active Test requests."""
         incoming = cls._as_cookie_dict(cookies)
         if not incoming and not merge:
             cls.scan_cookies = None
@@ -141,12 +125,6 @@ class SharedState:
         cls.scan_cookies = incoming or None
     @classmethod
     def set_active_test_finding(cls, finding: dict | None):
-        """
-        Hand-off from Alerts → Payload.
-        finding should include (when available):
-          url/endpoint, method, param/input, param_location, context, vuln_type
-          active_test_targets (list of path/param options)
-        """
         cls.active_test_finding = dict(finding) if finding else None
     @classmethod
     def clear_active_test_finding(cls):

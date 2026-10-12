@@ -1,4 +1,3 @@
-"""Send exactly one HTTP request."""
 from __future__ import annotations
 import time
 from urllib.parse import urljoin, urlparse

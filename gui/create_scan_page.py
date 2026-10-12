@@ -472,28 +472,26 @@ class CreateScanPage(QWidget):
             if user_id is None:
                 return False
             sid = getattr(SharedState, "scan_id", None)
-            if not sid:
-                ids = save_full_scan(
-                    application_name=case_name,
-                    url=url,
-                    scan_type=scan_type,
-                    findings=[],
-                    tech_stacks=stacks or None,
-                    stack_findings=stack_findings or None,
-                    user_id=user_id,
-                )
-                SharedState.case_id = ids["case_id"]
-                SharedState.scan_id = ids["scan_id"]
-                SharedState.case_name = case_name
+            if sid and update_scan_findings_and_stacks(
+                int(sid),
+                findings=None,
+                tech_stacks=stacks,
+                stack_findings=stack_findings or [],
+            ):
                 return True
-            return bool(
-                update_scan_findings_and_stacks(
-                    int(sid),
-                    findings=None,
-                    tech_stacks=stacks,
-                    stack_findings=stack_findings or [],
-                )
+            ids = save_full_scan(
+                application_name=case_name,
+                url=url,
+                scan_type=scan_type,
+                findings=[],
+                tech_stacks=stacks or None,
+                stack_findings=stack_findings or None,
+                user_id=user_id,
             )
+            SharedState.case_id = ids["case_id"]
+            SharedState.scan_id = ids["scan_id"]
+            SharedState.case_name = case_name
+            return True
         except Exception as e:
             print("save stack history error:", e)
             return False
@@ -778,15 +776,19 @@ class CreateScanPage(QWidget):
                 case_name=case_name,
                 tech_stacks=stacks_to_save,
             )
+            wrote = False
             if existing_sid:
-                update_scan_findings_and_stacks(
-                    int(existing_sid),
-                    findings=findings,
-                    tech_stacks=stacks_to_save,
-                    stack_findings=None,
+                wrote = bool(
+                    update_scan_findings_and_stacks(
+                        int(existing_sid),
+                        findings=findings,
+                        tech_stacks=stacks_to_save,
+                        stack_findings=None,
+                    )
                 )
-                SharedState.scan_id = existing_sid
-            else:
+                if wrote:
+                    SharedState.scan_id = existing_sid
+            if not wrote:
                 ids = save_full_scan(
                     application_name=case_name,
                     url=self._current_scan_url,
@@ -945,15 +947,19 @@ class CreateScanPage(QWidget):
                 case_name=case_name,
                 tech_stacks=stacks_to_save,
             )
+            wrote = False
             if existing_sid:
-                update_scan_findings_and_stacks(
-                    int(existing_sid),
-                    findings=findings,
-                    tech_stacks=stacks_to_save,
-                    stack_findings=None,
+                wrote = bool(
+                    update_scan_findings_and_stacks(
+                        int(existing_sid),
+                        findings=findings,
+                        tech_stacks=stacks_to_save,
+                        stack_findings=None,
+                    )
                 )
-                SharedState.scan_id = existing_sid
-            else:
+                if wrote:
+                    SharedState.scan_id = existing_sid
+            if not wrote:
                 ids = save_full_scan(
                     application_name=case_name,
                     url=target,

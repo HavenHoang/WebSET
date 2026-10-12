@@ -1,4 +1,3 @@
-"""Primary Start Scan (URL) fetch. Returns one plain artefact dict."""
 from __future__ import annotations
 import re
 import time
@@ -73,7 +72,6 @@ def _hash_to_http(fragment: str, page_url: str) -> str:
         path, query = frag, ""
     return f"{parsed.scheme}://{parsed.netloc}{path or '/'}" + (f"?{query}" if query else "")
 def discover_same_host_links(body: str, page_url: str, limit: int = 80) -> list[str]:
-    """In-scope HTML / listing / hash-route links from one page."""
     out: list[str] = []
     seen = set()
 
@@ -140,7 +138,6 @@ def _header_cookie_items(header_value: str) -> list:
             out.append({"name": name, "value": value.strip(), "path": "/", "raw": f"{name}={value.strip()}"})
     return out
 def _publish_scan_cookies(artefact: dict | None) -> None:
-    """Hand session cookies to GUI/Active Test. Merge, do not drop existing."""
     if not artefact or not artefact.get("ok"):
         return
     raw = list(artefact.get("cookies") or []) + list(artefact.get("set_cookie") or [])
@@ -186,7 +183,6 @@ def _apply_session_cookies(sess, cookies: list | None) -> None:
             except Exception:
                 continue
 def _sync_cookie_header(sess) -> None:
-    """Force Cookie header. http.cookiejar often drops localhost cookies."""
     parts = []
     seen = set()
     try:
@@ -380,7 +376,6 @@ def _security_form_urls(page_url: str) -> list[str]:
         origin + "/options",
     ]
 def _soften_security(sess, page_url: str, timeout: float) -> None:
-    """If the app exposes a security-level field, prefer the weakest option."""
     try:
         sess.cookies.set("security", "low", path="/")
         _sync_cookie_header(sess)

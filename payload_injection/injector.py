@@ -1,4 +1,3 @@
-"""Manual Payload mode — user-edited raw request."""
 from __future__ import annotations
 from urllib.parse import urlparse, parse_qs, parse_qsl
 from payload_injection.scope import in_scope, host_of

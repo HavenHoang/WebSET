@@ -1,5 +1,3 @@
-"""Start Scan entry point and rules for static (ZIP) assessment."""
-
 from __future__ import annotations
 
 import ast
@@ -58,8 +56,12 @@ _DEBUG_PATTERN = re.compile(
 )
 _EVAL_PATTERN = re.compile(r"\beval\s*\(|\bFunction\s*\(|new\s+Function\s*\(|vm\.runInContext", re.I)
 _HTML_SINK_PATTERN = re.compile(
-    r"\.innerHTML\s*=|document\.write\s*\(|dangerouslySetInnerHTML|bypassSecurityTrust",
-    re.I,
+    r"""(?ix)
+    \.innerHTML\s*=|document\.write\s*\(|dangerouslySetInnerHTML|bypassSecurityTrust
+    | (?:echo|print)\b(?![^;]{0,200}\b(?:htmlspecialchars|htmlentities)\b)[^;]{0,240}(?:\$_(GET|POST|REQUEST|COOKIE)\b|\$\{?[A-Za-z_]\w*\}?)
+    | <\?=(?!\s*(?:htmlspecialchars|htmlentities)\b)[^?]{0,240}(?:\$_(GET|POST|REQUEST|COOKIE)\b|\$\{?[A-Za-z_]\w*\}?)
+    | \$[A-Za-z_]\w*\s*\.?=\s*(?![^;]{0,300}\b(?:htmlspecialchars|htmlentities)\b)(?:['\"][^'\"]*</?[A-Za-z!][^'\"]*(?:\$_(?:GET|POST|REQUEST|COOKIE)\b|\$\{?[A-Za-z_]\w*\}?)|[^;]{0,160}['\"][^'\"]*</?[A-Za-z!][^'\"]*['\"]\s*\.\s*[^;]{0,80}(?:\$_(?:GET|POST|REQUEST|COOKIE)\b|\$\{?[A-Za-z_]\w*\}?)|(?:\$_(?:GET|POST|REQUEST|COOKIE)\b|\$\{?[A-Za-z_]\w*\}?)\s*\.\s*[^;]{0,80}['\"][^'\"]*</?[A-Za-z!])
+    """,
 )
 _SQL_CONCAT_PATTERN = re.compile(
     r"""(?ix)
@@ -121,7 +123,6 @@ _SAMPLE_PATH_HINTS = (
     "/docs/", "/doc/", "readme", "changelog", ".dist", "/node_modules/",
 )
 
-# Intra-file taint: user-controlled sources seen in typical web stacks.
 _SOURCE_RE = re.compile(
     r"""(?ix)
     \$_(GET|POST|REQUEST|COOKIE|FILES)\b
@@ -173,9 +174,10 @@ _TAINT_SINKS = (
             r"""(?ix)
             \.innerHTML\s*=|document\.write\s*\(|dangerouslySetInnerHTML
             | bypassSecurityTrust
-            | echo\s+\$_(GET|POST|REQUEST)
+            | (?:echo|print)\b(?![^;]{0,200}\b(?:htmlspecialchars|htmlentities)\b)[^;]{0,240}(?:\$_(GET|POST|REQUEST|COOKIE)\b|\$\{?[A-Za-z_]\w*\}?)
+            | <\?=(?!\s*(?:htmlspecialchars|htmlentities)\b)[^?]{0,240}(?:\$_(GET|POST|REQUEST|COOKIE)\b|\$\{?[A-Za-z_]\w*\}?)
+            | \$[A-Za-z_]\w*\s*\.?=\s*(?![^;]{0,300}\b(?:htmlspecialchars|htmlentities)\b)(?:['\"][^'\"]*</?[A-Za-z!][^'\"]*(?:\$_(?:GET|POST|REQUEST|COOKIE)\b|\$\{?[A-Za-z_]\w*\}?)|[^;]{0,160}['\"][^'\"]*</?[A-Za-z!][^'\"]*['\"]\s*\.\s*[^;]{0,80}(?:\$_(?:GET|POST|REQUEST|COOKIE)\b|\$\{?[A-Za-z_]\w*\}?)|(?:\$_(?:GET|POST|REQUEST|COOKIE)\b|\$\{?[A-Za-z_]\w*\}?)\s*\.\s*[^;]{0,80}['\"][^'\"]*</?[A-Za-z!])
             | res\.(send|write|end)\s*\(\s*(req\.|`[^`]*\$\{)
-            | print\s*\(\s*\$_(GET|POST|REQUEST)
             """
         ),
     ),
@@ -509,8 +511,22 @@ def _ident_in(snippet: str, ident: str) -> bool:
     if not ident:
         return False
     if ident.startswith("$"):
-        return ident in snippet
+        text = snippet or ""
+        bare = ident[1:]
+        return ident in text or ("${" + bare + "}") in text or ("{" + ident + "}") in text
     return re.search(r"\b" + re.escape(ident) + r"\b", snippet or "") is not None
+
+
+_PHP_FROM_INPUT_RE = re.compile(
+    r"""(?ix)
+    (\$[A-Za-z_]\w*)
+    \s*\.?=
+    \s*
+    [^;\n]{0,360}?
+    \$_(GET|POST|REQUEST|COOKIE|FILES)\b
+    """
+)
+_PHP_ENCODER_RE = re.compile(r"\b(?:htmlspecialchars|htmlentities)\b", re.I)
 
 
 def _tainted_idents(text: str) -> set[str]:
@@ -520,6 +536,12 @@ def _tainted_idents(text: str) -> set[str]:
             if not group or group in _SOURCE_GROUP_SKIP:
                 continue
             found.add(group)
+    for match in _PHP_FROM_INPUT_RE.finditer(text or ""):
+        if _PHP_ENCODER_RE.search(match.group(0)):
+            continue
+        name = match.group(1)
+        if name:
+            found.add(name)
     return found
 
 

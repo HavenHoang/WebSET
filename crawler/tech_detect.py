@@ -1,8 +1,3 @@
-"""
-Get Stack detection API + page-level tech names (for form artefacts).
-Return list[dict] with keys: name, category, version, description.
-Never attach CWE/OWASP. Never emit vulnerability findings here.
-"""
 from __future__ import annotations
 import re
 from urllib.parse import urlparse

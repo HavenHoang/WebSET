@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import datetime
 from xml.sax.saxutils import escape
 
@@ -8,6 +9,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas as pdfcanvas
+from reportlab.graphics.shapes import Drawing, Rect, String
 from reportlab.platypus import (
     BaseDocTemplate,
     Frame,
@@ -18,7 +20,6 @@ from reportlab.platypus import (
     TableStyle,
     PageBreak,
     NextPageTemplate,
-    KeepTogether,
     HRFlowable,
     CondPageBreak,
 )
@@ -28,28 +29,20 @@ from reportlab.platypus.tableofcontents import TableOfContents
 PAGE_WIDTH, PAGE_HEIGHT = A4
 CONTENT_WIDTH = PAGE_WIDTH - 36 * mm
 
-# Consistent spacing values used throughout the report
 TABLE_GAP = 6 * mm
 SECTION_GAP = 9 * mm
 SUBSECTION_GAP = 8 * mm
 FINDING_GAP = 7 * mm
 
 
-# ============================================================
-# WebSET brand palette
-# ============================================================
-
 NAVY = colors.HexColor("#07192D")
 NAVY_2 = colors.HexColor("#10284A")
 
-# Main report blue.
-# This is now used consistently across headings and table labels.
 NAVY_3 = colors.HexColor("#1F2A57")
 
 TEAL = colors.HexColor("#0F8F86")
 TEAL_LIGHT = colors.HexColor("#22C7BA")
 
-# Make all internal report table blues consistent.
 BLUE = NAVY_3
 
 TEXT = colors.HexColor("#172033")
@@ -74,10 +67,10 @@ LOW_BG = colors.HexColor("#EEF1F4")
 CLEAN = colors.HexColor("#15803D")
 CLEAN_BG = colors.HexColor("#DCFCE7")
 
+P1_BG = colors.HexColor("#FFF1F0")
+P2_BG = colors.HexColor("#FFF7E8")
+P3_BG = colors.HexColor("#F3F6FA")
 
-# ============================================================
-# Helpers
-# ============================================================
 
 def _safe(value):
     if value is None:
@@ -92,10 +85,6 @@ def _html(value):
 
 
 def _make_report_id(report):
-    """
-    Example:
-    WEBSET-2026/08/25-14:28:11
-    """
 
     generated = str(report.get("generated_at") or "")
 
@@ -107,9 +96,105 @@ def _make_report_id(report):
     except Exception:
         dt = datetime.now()
 
-    return dt.strftime(
-        "WEBSET-%Y/%m/%d-%H:%M:%S"
+    return dt.strftime("WEBSET-%Y%m%d-%H%M%S")
+
+
+def _as_int(value):
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _severity_counts(findings):
+    counts = {"High": 0, "Medium": 0, "Low": 0, "Total": 0}
+
+    for finding in findings or []:
+        severity = str(finding.get("severity") or "Low").strip().title()
+        if severity not in ("High", "Medium", "Low"):
+            severity = "Low"
+        counts[severity] += 1
+        counts["Total"] += 1
+
+    return counts
+
+
+def _report_counts(report):
+    scan_findings = report.get("findings") or []
+    platform_findings = report.get("stack_findings") or []
+
+    scan = dict(report.get("scan_summary") or {})
+    platform = dict(report.get("platform_summary") or {})
+
+    if not scan or not any(_as_int(scan.get(k)) for k in ("High", "Medium", "Low", "Total")):
+        scan = _severity_counts(scan_findings)
+    if not platform or not any(_as_int(platform.get(k)) for k in ("High", "Medium", "Low", "Total")):
+        platform = _severity_counts(platform_findings)
+
+    for bucket in (scan, platform):
+        bucket["High"] = _as_int(bucket.get("High"))
+        bucket["Medium"] = _as_int(bucket.get("Medium"))
+        bucket["Low"] = _as_int(bucket.get("Low"))
+        bucket["Total"] = _as_int(bucket.get("Total")) or (
+            bucket["High"] + bucket["Medium"] + bucket["Low"]
+        )
+
+    return scan, platform
+
+
+def _count_phrase(count, singular, plural=None):
+    plural = plural or f"{singular}s"
+    return f"{count} {singular if count == 1 else plural}"
+
+
+def _redact_evidence(value):
+    text = str(value)
+
+    def replace_email(match):
+        local, domain = match.group(1), match.group(2)
+        visible = local[:2] if len(local) > 1 else local[:1]
+        return f"{visible}***@{domain}"
+
+    return re.sub(
+        r"\b([A-Z0-9._%+-]+)@([A-Z0-9.-]+\.[A-Z]{2,})\b",
+        replace_email,
+        text,
+        flags=re.IGNORECASE,
     )
+
+
+def _display_value(value, label=""):
+    if isinstance(value, (list, tuple, set)):
+        parts = [str(item).strip() for item in value if str(item).strip()]
+    else:
+        raw = _safe(value)
+        if label == "Evidence":
+            raw = _redact_evidence(raw)
+        if label in ("Location", "Affected endpoints"):
+            parts = [part.strip() for part in re.split(r"\s+(?=https?://)", raw) if part.strip()]
+        else:
+            parts = [raw]
+
+    if len(parts) > 1:
+        return "<br/>".join(f"&bull; {_html(part)}" for part in parts)
+    return _html(parts[0] if parts else "-")
+
+
+def _polish_executive_line(line):
+    prefix = "\u2022" if line.startswith("\u2022") else ""
+    content = line[1:].strip() if prefix else line.strip()
+
+    match = re.fullmatch(r"Start Scan:\s*(\d+)\s+issue\(s\)(.*)", content, re.IGNORECASE)
+    if match:
+        count = int(match.group(1))
+        content = f"Start Scan: {_count_phrase(count, 'security finding')}{match.group(2)}"
+
+    match = re.fullmatch(r"Platform evaluation:\s*(\d+)\s+note\(s\)(.*)", content, re.IGNORECASE)
+    if match:
+        count = int(match.group(1))
+        content = f"Platform observations: {_count_phrase(count, 'observation')}{match.group(2)}"
+
+    return f"{prefix} {content}".strip()
 
 
 def _friendly_date(report):
@@ -145,7 +230,7 @@ def _assessment_type(report):
 
 
 def _overall_risk(report):
-    summary = report.get("summary") or {}
+    summary, _ = _report_counts(report)
 
     high = int(summary.get("High", 0) or 0)
     medium = int(summary.get("Medium", 0) or 0)
@@ -173,13 +258,6 @@ def _add_section_heading(
     styles,
     minimum_space=42 * mm,
 ):
-    """
-    Avoid starting a major section at the bottom of a page.
-
-    If less than minimum_space remains, ReportLab moves the
-    section to the next page.
-    """
-
     story.append(
         CondPageBreak(minimum_space)
     )
@@ -198,10 +276,6 @@ def _add_subsection_heading(
     styles,
     minimum_space=28 * mm,
 ):
-    """
-    Avoid leaving subsection headings stranded at page bottoms.
-    """
-
     story.append(
         CondPageBreak(minimum_space)
     )
@@ -214,9 +288,40 @@ def _add_subsection_heading(
     )
 
 
-# ============================================================
-# Report styles
-# ============================================================
+class _FindingTable(Table):
+    
+    def __init__(self, *args, continuation_title=None, continuation_style=None, **kwargs):
+        self._continuation_title = continuation_title
+        self._continuation_style = continuation_style
+        super().__init__(*args, **kwargs)
+
+    def split(self, availWidth, availHeight):
+        parts = super().split(availWidth, availHeight)
+
+        if len(parts) > 1 and self._continuation_title and self._continuation_style:
+            for part in parts:
+                part.hAlign = self.hAlign
+                part._continuation_title = self._continuation_title
+                part._continuation_style = self._continuation_style
+
+            for part in parts[1:]:
+                part._continuation_title = self._continuation_title
+                part._continuation_style = self._continuation_style
+                part._cellvalues[0][0] = Paragraph(
+                    f"{_html(self._continuation_title)} "
+                    "<font color='#B9C4D2'>(continued)</font>",
+                    self._continuation_style,
+                )
+
+            separated = []
+            for index, part in enumerate(parts):
+                if index:
+                    separated.append(CondPageBreak(245 * mm))
+                separated.append(part)
+            return separated
+
+        return parts
+
 
 def _styles():
     sample = getSampleStyleSheet()
@@ -259,10 +364,6 @@ def _styles():
             textColor=TEXT_SOFT,
         ),
 
-        # ====================================================
-        # Main numbered headings
-        # ====================================================
-
         "section": ParagraphStyle(
             "Heading1TOC",
             parent=sample["Heading2"],
@@ -273,7 +374,6 @@ def _styles():
             spaceBefore=14,
             spaceAfter=10,
 
-            # Prevent heading being separated from following content
             keepWithNext=1,
         ),
 
@@ -287,13 +387,8 @@ def _styles():
             spaceBefore=11,
             spaceAfter=7,
 
-            # Prevent subsection heading being stranded
             keepWithNext=1,
         ),
-
-        # ====================================================
-        # Body
-        # ====================================================
 
         "body": ParagraphStyle(
             "Body",
@@ -302,7 +397,8 @@ def _styles():
             fontSize=9.2,
             leading=14,
             textColor=TEXT,
-            wordWrap="CJK",
+            wordWrap="LTR",
+            splitLongWords=False,
             spaceAfter=7,
             alignment=TA_JUSTIFY,
         ),
@@ -314,7 +410,8 @@ def _styles():
             fontSize=9.2,
             leading=14,
             textColor=TEXT,
-            wordWrap="CJK",
+            wordWrap="LTR",
+            splitLongWords=False,
             spaceAfter=3,
         ),
 
@@ -325,7 +422,8 @@ def _styles():
             fontSize=7.8,
             leading=10.5,
             textColor=MUTED,
-            wordWrap="CJK",
+            wordWrap="LTR",
+            splitLongWords=False,
         ),
 
         "italic_small": ParagraphStyle(
@@ -335,9 +433,33 @@ def _styles():
             fontSize=8.4,
             leading=12.5,
             textColor=MUTED,
-            wordWrap="CJK",
+            wordWrap="LTR",
+            splitLongWords=False,
             spaceBefore=2,
             spaceAfter=7,
+        ),
+
+        "url": ParagraphStyle(
+            "UrlText",
+            parent=sample["BodyText"],
+            fontName="Helvetica",
+            fontSize=8.6,
+            leading=12.5,
+            textColor=TEXT,
+            wordWrap="CJK",
+            splitLongWords=True,
+            spaceAfter=4,
+        ),
+
+        "roadmap": ParagraphStyle(
+            "RoadmapText",
+            parent=sample["BodyText"],
+            fontName="Helvetica",
+            fontSize=8.0,
+            leading=11,
+            textColor=TEXT,
+            wordWrap="LTR",
+            splitLongWords=False,
         ),
 
         "center": ParagraphStyle(
@@ -360,10 +482,6 @@ def _styles():
             textColor=TEXT,
         ),
 
-        # ====================================================
-        # Table headings
-        # ====================================================
-
         "table_header": ParagraphStyle(
             "TableHeader",
             parent=sample["BodyText"],
@@ -384,9 +502,27 @@ def _styles():
             textColor=WHITE,
         ),
 
-        # ====================================================
-        # Risk cards
-        # ====================================================
+        "detail_label": ParagraphStyle(
+            "DetailLabel",
+            parent=sample["BodyText"],
+            fontName="Helvetica-Bold",
+            fontSize=8.3,
+            leading=11.5,
+            textColor=WHITE,
+            wordWrap="LTR",
+            splitLongWords=False,
+        ),
+
+        "finding_title": ParagraphStyle(
+            "FindingTitle",
+            parent=sample["BodyText"],
+            fontName="Helvetica-Bold",
+            fontSize=9.4,
+            leading=14,
+            textColor=WHITE,
+            wordWrap="LTR",
+            splitLongWords=False,
+        ),
 
         "card_label": ParagraphStyle(
             "CardLabel",
@@ -445,10 +581,6 @@ def _toc_styles(styles):
         ),
     ]
 
-
-# ============================================================
-# Numbered canvas
-# ============================================================
 
 class _NumberedCanvas(pdfcanvas.Canvas):
 
@@ -538,10 +670,6 @@ class _NumberedCanvas(pdfcanvas.Canvas):
         self.restoreState()
 
 
-# ============================================================
-# Cover / end-page backgrounds
-# ============================================================
-
 def _draw_geometric_background(
     canvas,
     closing=False,
@@ -607,6 +735,23 @@ def _draw_geometric_background(
             fill=1,
             stroke=0,
         )
+
+    canvas.setFillColor(
+        colors.Color(
+            1,
+            1,
+            1,
+            alpha=0.035,
+        )
+    )
+
+    sheen = canvas.beginPath()
+    sheen.moveTo(PAGE_WIDTH * 0.15, PAGE_HEIGHT)
+    sheen.lineTo(PAGE_WIDTH * 0.55, PAGE_HEIGHT)
+    sheen.lineTo(PAGE_WIDTH * 0.20, PAGE_HEIGHT - hero_height)
+    sheen.lineTo(PAGE_WIDTH * -0.05, PAGE_HEIGHT - hero_height)
+    sheen.close()
+    canvas.drawPath(sheen, fill=1, stroke=0)
 
     hero_bottom = PAGE_HEIGHT - hero_height
     tilt = 24 * mm
@@ -841,6 +986,29 @@ def _draw_geometric_background(
 
     centre_x = PAGE_WIDTH * 0.72
     centre_y = PAGE_HEIGHT * 0.62
+
+    for radius, alpha in (
+        (48 * mm, 0.05),
+        (39 * mm, 0.07),
+        (30 * mm, 0.10),
+        (21 * mm, 0.14),
+    ):
+        canvas.setFillColor(
+            colors.Color(
+                0.13,
+                0.78,
+                0.72,
+                alpha=alpha,
+            )
+        )
+
+        canvas.circle(
+            centre_x,
+            centre_y,
+            radius,
+            fill=1,
+            stroke=0,
+        )
 
     canvas.setStrokeColor(
         colors.Color(
@@ -1104,10 +1272,6 @@ def _content_page(canvas, doc):
     canvas.restoreState()
 
 
-# ============================================================
-# Cover content
-# ============================================================
-
 def _risk_badge_row(
     risk,
     risk_color,
@@ -1174,16 +1338,14 @@ def _risk_badge_row(
 
 
 def _cover_story(report, styles):
-    summary = report.get("summary") or {}
+    scan_summary, platform_summary = _report_counts(report)
 
     risk, risk_color = _overall_risk(
         report
     )
 
-    total = int(
-        summary.get("Total", 0)
-        or 0
-    )
+    scan_total = scan_summary["Total"]
+    platform_total = platform_summary["Total"]
 
     report_id = _make_report_id(
         report
@@ -1429,11 +1591,21 @@ def _cover_story(report, styles):
         ],
         [
             Paragraph(
-                "FINDINGS IDENTIFIED",
+                "SECURITY FINDINGS",
                 label_style,
             ),
             Paragraph(
-                str(total),
+                str(scan_total),
+                value_style,
+            ),
+        ],
+        [
+            Paragraph(
+                "PLATFORM OBSERVATIONS",
+                label_style,
+            ),
+            Paragraph(
+                str(platform_total),
                 value_style,
             ),
         ],
@@ -1549,10 +1721,6 @@ def _cover_story(report, styles):
     return story
 
 
-# ============================================================
-# Table of contents
-# ============================================================
-
 def _toc_page(report, styles):
     story = []
 
@@ -1568,9 +1736,43 @@ def _toc_page(report, styles):
             width="100%",
             thickness=0.8,
             color=BORDER,
-            spaceAfter=8,
+            spaceAfter=6,
         )
     )
+
+    story.append(Spacer(1, 2 * mm))
+
+    metadata = Table(
+        [
+            [
+                Paragraph(
+                    "CONFIDENTIAL \u2014 AUTHORISED SECURITY TESTING ONLY",
+                    styles["table_header_center"],
+                ),
+                "",
+            ],
+            [
+                Paragraph(f"<b>Target:</b> {_html(report.get('url'))}", styles["small"]),
+                Paragraph(f"<b>Report ID:</b> {_html(_make_report_id(report))}", styles["small"]),
+            ],
+        ],
+        colWidths=[104 * mm, 70 * mm],
+        hAlign="LEFT",
+    )
+    metadata.setStyle(TableStyle([
+        ("SPAN", (0, 0), (-1, 0)),
+        ("BACKGROUND", (0, 0), (-1, 0), NAVY_3),
+        ("BACKGROUND", (0, 1), (-1, 1), LIGHT_BLUE),
+        ("BOX", (0, 0), (-1, -1), 0.7, BORDER_STRONG),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.7, BORDER_STRONG),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 7),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    story.append(metadata)
+    story.append(Spacer(1, 5 * mm))
 
     toc = TableOfContents()
 
@@ -1584,10 +1786,6 @@ def _toc_page(report, styles):
 
     return story
 
-
-# ============================================================
-# Risk overview cards
-# ============================================================
 
 def _risk_summary_table(summary, styles):
     items = [
@@ -1747,6 +1945,35 @@ def _risk_summary_table(summary, styles):
     return result
 
 
+def _severity_chart(summary):
+    """Compact horizontal chart for quick executive-level comparison."""
+    values = [
+        ("High", _as_int(summary.get("High")), HIGH),
+        ("Medium", _as_int(summary.get("Medium")), MEDIUM),
+        ("Low", _as_int(summary.get("Low")), LOW),
+    ]
+    maximum = max([value for _, value, _ in values] + [1])
+
+    width = 174 * mm
+    height = 29 * mm
+    drawing = Drawing(width, height)
+    label_x = 0
+    bar_x = 27 * mm
+    bar_width = 132 * mm
+    row_height = 8.2 * mm
+
+    for row, (label, value, colour) in enumerate(values):
+        y = height - (row + 1) * row_height + 1.5 * mm
+        drawing.add(String(label_x, y + 1.2 * mm, label.upper(), fontName="Helvetica-Bold", fontSize=7.5, fillColor=TEXT_SOFT))
+        drawing.add(Rect(bar_x, y, bar_width, 4.4 * mm, fillColor=colors.HexColor("#E8EDF3"), strokeColor=None))
+        filled = bar_width * (value / maximum) if value else 0
+        if filled:
+            drawing.add(Rect(bar_x, y, filled, 4.4 * mm, fillColor=colour, strokeColor=None))
+        drawing.add(String(bar_x + bar_width + 3 * mm, y + 1.1 * mm, str(value), fontName="Helvetica-Bold", fontSize=8, fillColor=colour))
+
+    return drawing
+
+
 def _severity_legend(styles):
     rows = [
         [
@@ -1862,8 +2089,7 @@ def _severity_legend(styles):
 
 
 def _scan_breakdown_table(report, styles):
-    scan = report.get("scan_summary") or {}
-    platform = report.get("platform_summary") or {}
+    scan, platform = _report_counts(report)
 
     rows = [
         [
@@ -1900,7 +2126,7 @@ def _scan_breakdown_table(report, styles):
         ],
         [
             Paragraph(
-                "Platform Evaluation",
+                "Platform Observations",
                 styles["body"],
             ),
             platform.get("High", 0),
@@ -1999,6 +2225,119 @@ def _scan_breakdown_table(report, styles):
         ])
     )
 
+    return table
+
+
+def _assessment_information_table(report, styles):
+    """Show reproducibility details when the scanner supplies them."""
+    rows = [[
+        Paragraph("Assessment Detail", styles["table_header"]),
+        Paragraph("Recorded Value", styles["table_header"]),
+    ]]
+
+    details = [
+        ("Target", report.get("url")),
+        ("Assessment type", _assessment_type(report)),
+        ("Generated", _friendly_date(report)),
+        ("WebSET version", report.get("webset_version") or report.get("app_version")),
+        ("Scanner / ruleset", report.get("scanner_version") or report.get("ruleset_version")),
+        ("Build / Git commit", report.get("git_commit") or report.get("build_id")),
+        ("Authentication", report.get("authentication") or report.get("auth_context")),
+        ("Environment", report.get("environment")),
+        ("Scope", report.get("scope") or "Target URL and discovered application routes"),
+    ]
+
+    for label, value in details:
+        if value in (None, "", []):
+            continue
+        rows.append([
+            Paragraph(f"<b>{_html(label)}</b>", styles["body"]),
+            Paragraph(_display_value(value, label), styles["body"]),
+        ])
+
+    table = Table(rows, colWidths=[44 * mm, 130 * mm], repeatRows=1, hAlign="LEFT")
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), NAVY_3),
+        ("TEXTCOLOR", (0, 0), (-1, 0), WHITE),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [WHITE, LIGHT]),
+        ("GRID", (0, 0), (-1, -1), 0.6, BORDER_STRONG),
+        ("BOX", (0, 0), (-1, -1), 1, BORDER_STRONG),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    return table
+
+
+def _remediation_roadmap(report, styles):
+    """Create an actionable, prioritised plan rather than repeating prose."""
+    security = report.get("findings") or []
+    platform = report.get("stack_findings") or []
+    items = [(f, "Security finding") for f in security] + [(f, "Platform observation") for f in platform]
+
+    if not items:
+        return Paragraph("No remediation recommendations were required.", styles["body"])
+
+    severity_order = {"High": 0, "Medium": 1, "Low": 2}
+    items.sort(key=lambda item: severity_order.get(str(item[0].get("severity") or "Low").title(), 3))
+
+    rows = [[
+        Paragraph("Priority", styles["table_header_center"]),
+        Paragraph("Finding", styles["table_header"]),
+        Paragraph("Recommended action", styles["table_header"]),
+        Paragraph("Target", styles["table_header_center"]),
+    ]]
+    priority_rows = []
+
+    for finding, item_type in items:
+        severity = str(finding.get("severity") or "Low").title()
+        priority = {"High": "P1", "Medium": "P2", "Low": "P3"}.get(severity, "P3")
+        target = {"High": "Now", "Medium": "Within 30 days", "Low": "Within 90 days"}.get(severity, "Within 90 days")
+        name = finding.get("vulnerability") or finding.get("name") or "Finding"
+        action = finding.get("remediation") or "Review, validate and assign an owner."
+        display_name = f"Platform: {name}" if item_type == "Platform observation" else name
+        row_number = len(rows)
+        row_bg = {"High": P1_BG, "Medium": P2_BG, "Low": P3_BG}.get(severity, P3_BG)
+        priority_colour = {"High": HIGH, "Medium": MEDIUM, "Low": LOW}.get(severity, LOW)
+        rows.append([
+            Paragraph(
+                f"<font color='{WHITE.hexval()}'><b>{priority}</b><br/>"
+                f"<font size='7'>{_html(severity)}</font></font>",
+                styles["center"],
+            ),
+            Paragraph(_html(display_name), styles["roadmap"]),
+            Paragraph(_html(action), styles["roadmap"]),
+            Paragraph(_html(target), styles["center"]),
+        ])
+        priority_rows.append((row_number, row_bg, priority_colour))
+
+    table = Table(
+        rows,
+        colWidths=[18 * mm, 47 * mm, 88 * mm, 21 * mm],
+        repeatRows=1,
+        splitByRow=1,
+        splitInRow=1,
+        hAlign="LEFT",
+    )
+    commands = [
+        ("BACKGROUND", (0, 0), (-1, 0), NAVY_3),
+        ("TEXTCOLOR", (0, 0), (-1, 0), WHITE),
+        ("GRID", (0, 0), (-1, -1), 0.5, BORDER_STRONG),
+        ("BOX", (0, 0), (-1, -1), 1, BORDER_STRONG),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]
+
+    for row_number, row_bg, priority_colour in priority_rows:
+        commands.append(("BACKGROUND", (0, row_number), (-1, row_number), row_bg))
+        commands.append(("BACKGROUND", (0, row_number), (0, row_number), priority_colour))
+
+    table.setStyle(TableStyle(commands))
     return table
 
 
@@ -2192,27 +2531,51 @@ def _standards_table(report, styles):
             styles["body"],
         )
 
+    header_row = [
+        Paragraph(
+            "Standard",
+            styles["table_header"],
+        ),
+        Paragraph(
+            "Findings Mapped",
+            styles["table_header"],
+        ),
+    ]
+    rows.insert(0, header_row)
+
     table = Table(
         rows,
         colWidths=[
             31 * mm,
             143 * mm,
         ],
+        repeatRows=1,
         hAlign="LEFT",
     )
 
     table.setStyle(
         TableStyle([
-            # Same NAVY_3 as finding tables
             (
                 "BACKGROUND",
                 (0, 0),
+                (-1, 0),
+                NAVY_3,
+            ),
+            (
+                "TEXTCOLOR",
+                (0, 0),
+                (-1, 0),
+                WHITE,
+            ),
+            (
+                "BACKGROUND",
+                (0, 1),
                 (0, -1),
                 NAVY_3,
             ),
             (
                 "BACKGROUND",
-                (1, 0),
+                (1, 1),
                 (1, -1),
                 WHITE,
             ),
@@ -2266,10 +2629,6 @@ def _standards_table(report, styles):
     return table
 
 
-# ============================================================
-# Security findings
-# ============================================================
-
 def _finding_elements(index, finding, styles):
     severity = str(
         finding.get("severity") or "Low"
@@ -2288,88 +2647,6 @@ def _finding_elements(index, finding, styles):
         finding.get("vulnerability")
         or finding.get("name")
         or "Finding"
-    )
-
-    header = Table(
-        [[
-            Paragraph(
-                f"<b>{index}. "
-                f"{_html(vulnerability)}</b>",
-                styles["body_bold"],
-            ),
-            Paragraph(
-                f"<font color='{WHITE.hexval()}'>"
-                f"<b>{_html(severity).upper()}</b>"
-                f"</font>",
-                styles["center"],
-            ),
-        ]],
-        colWidths=[
-            146 * mm,
-            28 * mm,
-        ],
-        hAlign="LEFT",
-    )
-
-    header.setStyle(
-        TableStyle([
-            (
-                "BACKGROUND",
-                (0, 0),
-                (0, 0),
-                colors.HexColor("#EAEFF6"),
-            ),
-            (
-                "BACKGROUND",
-                (1, 0),
-                (1, 0),
-                sev_fg,
-            ),
-            (
-                "GRID",
-                (0, 0),
-                (-1, -1),
-                0.8,
-                BORDER_STRONG,
-            ),
-            (
-                "BOX",
-                (0, 0),
-                (-1, -1),
-                1.1,
-                NAVY_3,
-            ),
-            (
-                "VALIGN",
-                (0, 0),
-                (-1, -1),
-                "MIDDLE",
-            ),
-            (
-                "LEFTPADDING",
-                (0, 0),
-                (-1, -1),
-                8,
-            ),
-            (
-                "RIGHTPADDING",
-                (0, 0),
-                (-1, -1),
-                8,
-            ),
-            (
-                "TOPPADDING",
-                (0, 0),
-                (-1, -1),
-                7,
-            ),
-            (
-                "BOTTOMPADDING",
-                (0, 0),
-                (-1, -1),
-                7,
-            ),
-        ])
     )
 
     standards = []
@@ -2432,6 +2709,34 @@ def _finding_elements(index, finding, styles):
             or finding.get("url"),
         ),
         (
+            "HTTP Method",
+            finding.get("http_method") or finding.get("method"),
+        ),
+        (
+            "Parameter",
+            finding.get("parameter") or finding.get("parameter_name"),
+        ),
+        (
+            "Payload",
+            finding.get("payload") or finding.get("test_payload"),
+        ),
+        (
+            "HTTP Status",
+            finding.get("http_status") or finding.get("status_code"),
+        ),
+        (
+            "Evidence",
+            finding.get("evidence") or finding.get("response_evidence"),
+        ),
+        (
+            "Authentication",
+            finding.get("authentication") or finding.get("auth_context"),
+        ),
+        (
+            "Detected At",
+            finding.get("detected_at") or finding.get("timestamp"),
+        ),
+        (
             "Description",
             finding.get("description"),
         ),
@@ -2458,7 +2763,18 @@ def _finding_elements(index, finding, styles):
     ]
         
 
-    rows = []
+    rows = [[
+        Paragraph(
+            f"{index}. {_html(vulnerability)}",
+            styles["finding_title"],
+        ),
+        "",
+        Paragraph(
+            f"<font color='{WHITE.hexval()}'><b>{_html(severity).upper()}</b></font>",
+            styles["center"],
+        ),
+    ]]
+    evidence_rows = []
 
     for label, value in details:
         if value in (
@@ -2468,53 +2784,68 @@ def _finding_elements(index, finding, styles):
         ):
             continue
 
+        value_style = styles["url"] if label in ("Location", "Affected endpoints") else styles["body"]
+
+        row_number = len(rows)
         rows.append([
             Paragraph(
                 label,
-                styles["table_header"],
+                styles["detail_label"],
             ),
             Paragraph(
-                _html(value),
-                styles["body"],
+                _display_value(value, label),
+                value_style,
             ),
+            "",
         ])
 
-    body = Table(
+        if label == "Evidence":
+            evidence_rows.append(row_number)
+
+    title_text = f"{index}. {vulnerability}"
+    body = _FindingTable(
         rows,
         colWidths=[
             32 * mm,
-            142 * mm,
+            114 * mm,
+            28 * mm,
         ],
+        repeatRows=1,
         splitByRow=1,
+        splitInRow=1,
         hAlign="LEFT",
+        continuation_title=title_text,
+        continuation_style=styles["finding_title"],
     )
 
-    body.setStyle(
-        TableStyle([
+    commands = [
+            ("SPAN", (0, 0), (1, 0)),
+            ("BACKGROUND", (0, 0), (1, 0), NAVY_3),
+            ("BACKGROUND", (2, 0), (2, 0), sev_fg),
             (
                 "BACKGROUND",
-                (0, 0),
+                (0, 1),
                 (0, -1),
                 NAVY_3,
             ),
             (
                 "BACKGROUND",
-                (1, 0),
-                (1, -1),
+                (1, 1),
+                (2, -1),
                 WHITE,
             ),
             (
-                "GRID",
+                "LINEBELOW",
                 (0, 0),
-                (-1, -1),
-                0.6,
-                BORDER_STRONG,
+                (-1, -2),
+                0.5,
+                BORDER,
             ),
             (
                 "BOX",
                 (0, 0),
                 (-1, -1),
-                1,
+                1.0,
                 NAVY_3,
             ),
             (
@@ -2527,35 +2858,36 @@ def _finding_elements(index, finding, styles):
                 "LEFTPADDING",
                 (0, 0),
                 (-1, -1),
-                8,
+                9,
             ),
             (
                 "RIGHTPADDING",
                 (0, 0),
                 (-1, -1),
-                8,
+                9,
             ),
             (
                 "TOPPADDING",
                 (0, 0),
                 (-1, -1),
-                6,
+                8,
             ),
             (
                 "BOTTOMPADDING",
                 (0, 0),
                 (-1, -1),
-                6,
+                8,
             ),
-        ])
-    )
+        ]
 
-    # More visible breathing room between each finding card.
+    for row_number in range(1, len(rows)):
+        commands.append(("SPAN", (1, row_number), (2, row_number)))
+
+    body.setStyle(TableStyle(commands))
+
     return [
-        KeepTogether([
-            header,
-            body,
-        ]),
+        CondPageBreak(62 * mm),
+        body,
         Spacer(
             1,
             FINDING_GAP,
@@ -2563,21 +2895,15 @@ def _finding_elements(index, finding, styles):
     ]
 
 
-# ============================================================
-# End page
-# ============================================================
-
 def _end_story(report, styles):
-    summary = report.get("summary") or {}
+    scan_summary, platform_summary = _report_counts(report)
 
     risk, risk_color = _overall_risk(
         report
     )
 
-    total = int(
-        summary.get("Total", 0)
-        or 0
-    )
+    security_total = scan_summary["Total"]
+    platform_total = platform_summary["Total"]
 
     report_id = _make_report_id(
         report
@@ -2708,11 +3034,21 @@ def _end_story(report, styles):
         ],
         [
             Paragraph(
-                "Total Findings",
+                "Security Findings",
                 label_style,
             ),
             Paragraph(
-                str(total),
+                str(security_total),
+                value_style,
+            ),
+        ],
+        [
+            Paragraph(
+                "Platform Observations",
+                label_style,
+            ),
+            Paragraph(
+                str(platform_total),
                 value_style,
             ),
         ],
@@ -2864,10 +3200,8 @@ def _end_story(report, styles):
 
     story.append(
         Paragraph(
-            "www.webset-security.example "
-            "&nbsp;\u00b7&nbsp; "
-            "This report is confidential and intended solely "
-            "for the recipient organisation.",
+            "This report is confidential, intended solely for the recipient "
+            "organisation, and limited to authorised security testing.",
             ParagraphStyle(
                 "EndFooterNote",
                 parent=styles["small"],
@@ -2881,10 +3215,6 @@ def _end_story(report, styles):
 
     return story
 
-
-# ============================================================
-# Document template
-# ============================================================
 
 class _ReportDocTemplate(BaseDocTemplate):
 
@@ -2936,10 +3266,6 @@ class _ReportDocTemplate(BaseDocTemplate):
                 ),
             )
 
-
-# ============================================================
-# PDF export
-# ============================================================
 
 def export_pdf(
     url: str,
@@ -3049,10 +3375,6 @@ def export_pdf(
 
     story = []
 
-    # ========================================================
-    # Cover
-    # ========================================================
-
     story.extend(
         _cover_story(
             report,
@@ -3070,10 +3392,6 @@ def export_pdf(
         PageBreak()
     )
 
-    # ========================================================
-    # Table of contents
-    # ========================================================
-
     story.extend(
         _toc_page(
             report,
@@ -3085,10 +3403,6 @@ def export_pdf(
         PageBreak()
     )
 
-    # ========================================================
-    # 1. Executive Summary
-    # ========================================================
-
     _add_section_heading(
         story,
         "1. Executive Summary",
@@ -3096,16 +3410,14 @@ def export_pdf(
         minimum_space=45 * mm,
     )
 
-    summary = report.get("summary") or {}
+    scan_summary, platform_summary = _report_counts(report)
 
     risk, risk_color = _overall_risk(
         report
     )
 
-    total = int(
-        summary.get("Total", 0)
-        or 0
-    )
+    security_total = scan_summary["Total"]
+    platform_total = platform_summary["Total"]
 
     intro = (
         f"WebSET performed an automated security assessment of "
@@ -3114,8 +3426,13 @@ def export_pdf(
         f"The assessment combined a dynamic start scan of the live "
         f"application with a platform/technology evaluation, mapping "
         f"identified issues to industry-standard classification "
-        f"frameworks (CWE, WASC, OWASP, NIST and SANS) where applicable. "
-        f"A total of <b>{total}</b> finding(s) were identified, resulting "
+        f"frameworks where mappings were available. "
+        f"The Start Scan identified "
+        f"<b>{_count_phrase(security_total, 'security finding')}</b>, "
+        f"while the separate platform evaluation recorded "
+        f"<b>{_count_phrase(platform_total, 'platform observation')}</b>. "
+        f"The security findings "
+        f"resulted "
         f"in an overall risk rating of "
         f"<font color='{risk_color.hexval()}'>"
         f"<b>{_html(risk)}</b>"
@@ -3129,13 +3446,23 @@ def export_pdf(
         )
     )
 
+    story.append(
+        Paragraph(
+            "<b>Risk-rating basis:</b> The overall rating is calculated "
+            "from Start Scan security findings only. Platform observations "
+            "are reported separately and do not raise the overall rating "
+            "unless independently validated as vulnerabilities.",
+            styles["italic_small"],
+        )
+    )
+
     executive = str(
         report.get("executive_summary")
         or "-"
     )
 
     for line in executive.splitlines():
-        line = line.strip()
+        line = _polish_executive_line(line.strip())
 
         if not line:
             continue
@@ -3193,8 +3520,8 @@ def export_pdf(
     story.append(
         Paragraph(
             "This assessment was performed using automated, "
-            "non-intrusive techniques against the publicly reachable "
-            "surface of the target application. Two evaluation passes "
+            "non-intrusive techniques against the reachable surface of "
+            "the configured target application. Two evaluation passes "
             "were run: a <b>Start Scan</b>, which probes live HTTP "
             "responses, headers and session handling for common "
             "web-application weaknesses, and a "
@@ -3206,6 +3533,26 @@ def export_pdf(
             styles["body"],
         )
     )
+
+    target_url = str(report.get("url") or "").lower()
+    if "127.0.0.1" in target_url or "localhost" in target_url:
+        story.append(
+            Paragraph(
+                "<b>Local-lab context:</b> Transport and deployment findings "
+                "may reflect the authorised training configuration. Reassess "
+                "their severity before applying these results to production.",
+                styles["italic_small"],
+            )
+        )
+
+    _add_subsection_heading(
+        story,
+        "1.3 Assessment Information",
+        styles,
+        minimum_space=45 * mm,
+    )
+
+    story.append(_assessment_information_table(report, styles))
 
     story.append(
         Spacer(
@@ -3229,10 +3576,6 @@ def export_pdf(
         PageBreak()
     )
 
-    # ========================================================
-    # 2. Risk Overview
-    # ========================================================
-
     _add_section_heading(
         story,
         "2. Risk Overview",
@@ -3242,8 +3585,20 @@ def export_pdf(
 
     story.append(
         _risk_summary_table(
-            summary,
+            scan_summary,
             styles,
+        )
+    )
+
+    story.append(Spacer(1, 4 * mm))
+    story.append(_severity_chart(scan_summary))
+
+    story.append(
+        Paragraph(
+            "Risk cards represent Start Scan security findings only; "
+            f"{_count_phrase(platform_total, 'platform observation')} "
+            "listed separately.",
+            styles["italic_small"],
         )
     )
 
@@ -3314,10 +3669,6 @@ def export_pdf(
         PageBreak()
     )
 
-    # ========================================================
-    # 3. Start Scan Findings
-    # ========================================================
-
     scan_findings = (
         report.get("findings")
         or []
@@ -3358,10 +3709,6 @@ def export_pdf(
         )
     )
 
-    # ========================================================
-    # 4. Platform Evaluation
-    # ========================================================
-
     platform_findings = (
         report.get("stack_findings")
         or []
@@ -3369,7 +3716,7 @@ def export_pdf(
 
     _add_section_heading(
         story,
-        "4. Platform Evaluation \u2014 Get Stack",
+        "4. Platform Observations",
         styles,
         minimum_space=55 * mm,
     )
@@ -3390,7 +3737,7 @@ def export_pdf(
     else:
         story.append(
             Paragraph(
-                "No platform-evaluation findings were recorded.",
+                "No platform observations were recorded.",
                 styles["body"],
             )
         )
@@ -3399,129 +3746,22 @@ def export_pdf(
         PageBreak()
     )
 
-    # ========================================================
-    # 5. Remediation
-    # ========================================================
-
     _add_section_heading(
         story,
-        "5. Remediation Recommendations",
+        "5. Prioritised Remediation Roadmap",
         styles,
         minimum_space=50 * mm,
     )
 
-    remediation = (
-        report.get("remediation")
-        or []
-    )
-
-    if remediation:
-        for index, tip in enumerate(
-            remediation,
-            start=1,
-        ):
-            recommendation = Table(
-                [[
-                    Paragraph(
-                        f"<b>{index}</b>",
-                        ParagraphStyle(
-                            "RecIndex",
-                            parent=styles["center_bold"],
-                            textColor=WHITE,
-                        ),
-                    ),
-                    Paragraph(
-                        _html(tip),
-                        styles["body"],
-                    ),
-                ]],
-                colWidths=[
-                    10 * mm,
-                    164 * mm,
-                ],
-                hAlign="LEFT",
-            )
-
-            recommendation.setStyle(
-                TableStyle([
-                    (
-                        "BACKGROUND",
-                        (0, 0),
-                        (0, 0),
-                        NAVY_3,
-                    ),
-                    (
-                        "BACKGROUND",
-                        (1, 0),
-                        (1, 0),
-                        WHITE,
-                    ),
-                    (
-                        "GRID",
-                        (0, 0),
-                        (-1, -1),
-                        0.6,
-                        BORDER_STRONG,
-                    ),
-                    (
-                        "BOX",
-                        (0, 0),
-                        (-1, -1),
-                        1,
-                        BORDER_STRONG,
-                    ),
-                    (
-                        "VALIGN",
-                        (0, 0),
-                        (-1, -1),
-                        "TOP",
-                    ),
-                    (
-                        "LEFTPADDING",
-                        (0, 0),
-                        (-1, -1),
-                        8,
-                    ),
-                    (
-                        "RIGHTPADDING",
-                        (0, 0),
-                        (-1, -1),
-                        8,
-                    ),
-                    (
-                        "TOPPADDING",
-                        (0, 0),
-                        (-1, -1),
-                        7,
-                    ),
-                    (
-                        "BOTTOMPADDING",
-                        (0, 0),
-                        (-1, -1),
-                        7,
-                    ),
-                ])
-            )
-
-            story.append(
-                recommendation
-            )
-
-            # More visible gap between remediation tables
-            story.append(
-                Spacer(
-                    1,
-                    4 * mm,
-                )
-            )
-
-    else:
-        story.append(
-            Paragraph(
-                "No remediation recommendations were required.",
-                styles["body"],
-            )
+    story.append(
+        Paragraph(
+            "Target timeframes are guidance for triage. Confirm validity, "
+            "business impact, ownership and implementation effort before "
+            "committing remediation dates.",
+            styles["italic_small"],
         )
+    )
+    story.append(_remediation_roadmap(report, styles))
 
     story.append(
         Spacer(
@@ -3529,10 +3769,6 @@ def export_pdf(
             SECTION_GAP,
         )
     )
-
-    # ========================================================
-    # 6. Confidentiality
-    # ========================================================
 
     _add_section_heading(
         story,
@@ -3571,10 +3807,6 @@ def export_pdf(
             styles["body"],
         )
     )
-
-    # ========================================================
-    # End page
-    # ========================================================
 
     story.append(
         NextPageTemplate(

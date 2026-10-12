@@ -100,7 +100,6 @@ class MainWindow(QMainWindow):
         self.alerts_page = AlertsPage()
         self.tech_stack_page = TechStackPage()
         self.payload_tab = PayloadTab()
-        # Alias used by AlertsPage Active Test hand-off
         self.payload_page = self.payload_tab
         self.report_tab = ReportTab()
         for page in [
@@ -132,9 +131,6 @@ class MainWindow(QMainWindow):
         self.toast_timer.setSingleShot(True)
         self.toast_timer.timeout.connect(self.toast.hide)
         self.switch_page(0)
-    # ------------------------------------------------------------------
-    # Active Test navigation (Alerts → Payload)
-    # ------------------------------------------------------------------
     def show_payload_page(self):
         """Open Payload tab; load Active Test finding if SharedState has one."""
         self.switch_page(5)
@@ -196,7 +192,6 @@ class MainWindow(QMainWindow):
         ]:
             if hasattr(page, "refresh"):
                 page.refresh()
-        # Payload target may have changed after scan / get stack
         if hasattr(self.payload_tab, "refresh_target"):
             try:
                 from core.shared_state import SharedState
@@ -220,7 +215,6 @@ class MainWindow(QMainWindow):
         elif index == 4:
             self.tech_stack_page.refresh()
         elif index == 5:
-            # Prefer Active Test hand-off; otherwise refresh session target
             finding = None
             try:
                 from core.shared_state import SharedState
@@ -241,7 +235,6 @@ class MainWindow(QMainWindow):
         self.toast.raise_()
         self.toast_timer.start(duration_ms)
     def _refresh_page_themes(self):
-        """Update page titles that sit on the content shell (light vs dark)."""
         for page in (self.alerts_page, self.tech_stack_page):
             if page is not None and hasattr(page, "apply_page_theme"):
                 page.apply_page_theme()
@@ -405,7 +398,6 @@ class MainWindow(QMainWindow):
             }
         """)
     def apply_dark_theme(self):
-        """Dark shell: sidebar, content, and status bar use distinct colors."""
         self.setStyleSheet("""
             QMainWindow {
                 background: #0b1220;

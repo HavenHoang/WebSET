@@ -1,13 +1,3 @@
-"""
-core/scan_manager.py — Real backend (Member 4).
-
-GUI call sites:
-    from core.scan_manager import run_scan
-    from core.scan_manager import run_static_scan
-    from core.scan_manager import run_stack_eval_url
-    from core.scan_manager import run_stack_eval_static
-"""
-
 from __future__ import annotations
 
 from urllib.parse import urlparse

@@ -796,6 +796,15 @@ def _analyse_dynamic_body(
             queue.append(home)
     queue.sort(key=_priority)
     crawl_started = time.time()
+    queue = _discover_urls(
+        target,
+        artefact,
+    )
+    for home in _home_urls(target):
+        if home.rstrip("/") not in visited:
+            queue.append(home)
+    queue.sort(key=_priority)
+    crawl_started = time.time()
     _notify_progress(
         on_progress,
         1,
@@ -806,6 +815,7 @@ def _analyse_dynamic_body(
         queue
         and len(visited)
         <= _MAX_EXTRA_TARGETS
+        and _budget_left(crawl_started)
         and _budget_left(crawl_started)
     ):
         extra_url = queue.pop(0)
@@ -864,6 +874,7 @@ def _analyse_dynamic_body(
     _publish_session_cookies(
         session_cookies
     )
+    if _budget_left(crawl_started):
     if _budget_left(crawl_started):
         _notify_progress(
             on_progress,

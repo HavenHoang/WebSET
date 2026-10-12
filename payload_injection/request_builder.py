@@ -1,4 +1,3 @@
-"""Build ONE HTTP request from finding context + test marker."""
 from __future__ import annotations
 import json
 import re
@@ -70,9 +69,6 @@ def ensure_form_companions(finding: dict) -> dict:
     return finding
 _LOGIN_PARAM_RE = re.compile(r"^(user|username|email|login|password)$", re.I)
 def with_form_controls(fields: dict, param: str) -> dict:
-    """Many HTML handlers only run when a successful submit control is present.
-    GET probes that send only the injected field never hit the sink.
-    """
     out = {
         str(k): ("" if v is None else str(v))
         for k, v in (fields or {}).items()
