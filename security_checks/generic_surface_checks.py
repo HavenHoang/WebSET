@@ -9,8 +9,8 @@ _PROBE_STATE: contextvars.ContextVar = contextvars.ContextVar(
     default=None,
 )
 _MAX_WIDE_TRIES = 3
-_PROBE_TIMEOUT = 3.0
-_SURFACE_BUDGET_SEC = 12.0
+_PROBE_TIMEOUT = 8.0
+_SURFACE_BUDGET_SEC = 60.0
 
 
 def reset_origin_wide_probes() -> None:
