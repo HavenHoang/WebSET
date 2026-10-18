@@ -1478,6 +1478,7 @@ class TestResultCard(QFrame):
         else:
             badge_txt, border, icon, icon_color = "NOT CONFIRMED", "#e2e8f0", "○", "#94a3b8"
             badge_bg, badge_fg = "#f1f5f9", "#64748b"
+
         self.setStyleSheet(f"""
             QFrame#testResultCard {{
                 background: #ffffff;
