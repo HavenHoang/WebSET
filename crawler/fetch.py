@@ -88,7 +88,6 @@ def discover_same_host_links(body: str, page_url: str, limit: int = 80) -> list[
             return
         seen.add(abs_u)
         out.append(abs_u)
-
     for raw in _HREF_RE.findall(body or ""):
         text = str(raw or "").strip()
         if not text or text.startswith(("mailto:", "javascript:", "data:")):
@@ -99,7 +98,6 @@ def discover_same_host_links(body: str, page_url: str, limit: int = 80) -> list[
         _keep(urljoin(page_url, text.split("#")[0]))
         if len(out) >= limit:
             return out
-
     for match in _HASH_ROUTE_RE.findall(body or ""):
         _keep(_hash_to_http(match if str(match).startswith("#") else "#" + str(match), page_url))
         if len(out) >= limit:
