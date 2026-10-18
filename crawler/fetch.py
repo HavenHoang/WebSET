@@ -71,6 +71,7 @@ def _hash_to_http(fragment: str, page_url: str) -> str:
     else:
         path, query = frag, ""
     return f"{parsed.scheme}://{parsed.netloc}{path or '/'}" + (f"?{query}" if query else "")
+
 def discover_same_host_links(body: str, page_url: str, limit: int = 80) -> list[str]:
     out: list[str] = []
     seen = set()
@@ -98,6 +99,7 @@ def discover_same_host_links(body: str, page_url: str, limit: int = 80) -> list[
         _keep(urljoin(page_url, text.split("#")[0]))
         if len(out) >= limit:
             return out
+
     for match in _HASH_ROUTE_RE.findall(body or ""):
         _keep(_hash_to_http(match if str(match).startswith("#") else "#" + str(match), page_url))
         if len(out) >= limit:
