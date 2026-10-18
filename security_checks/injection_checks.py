@@ -723,6 +723,7 @@ def check_sql_error_indicators(ctx: HttpContext, params, baseline_body: str | No
     name = str(param.get("name") or "").strip()
     if not name:
         return []
+
     evidence = f"{engine} error signature in response: '{phrase}'"
     if ctx.status >= 500:
         evidence += f" (HTTP {ctx.status})"
